@@ -8,7 +8,6 @@
 
 [![PyPI](https://img.shields.io/pypi/v/eeg-mcp?color=14b8a6&logo=pypi&logoColor=white&cacheSeconds=1800)](https://pypi.org/project/eeg-mcp/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-14b8a6?logo=python&logoColor=white)](https://pypi.org/project/eeg-mcp/)
-[![Downloads](https://img.shields.io/pypi/dm/eeg-mcp?color=14b8a6&cacheSeconds=1800)](https://pypi.org/project/eeg-mcp/)
 [![Docs](https://img.shields.io/badge/docs-aimplifier.github.io-14b8a6)](https://aimplifier.github.io/eeg-mcp/)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-14b8a6)](LICENSE)
 
