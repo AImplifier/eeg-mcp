@@ -65,6 +65,14 @@ jobs:
           twine check dist/*
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # PyPI permanently refuses a re-upload of a version it already has.
+          # Without this, tagging a release that was first published by a
+          # manual pypi-only run would fail here -- and that failure would
+          # then skip the registry job, stranding the submission. Treating an
+          # already-present version as a no-op keeps the two halves
+          # independently re-runnable, which is the point of splitting them.
+          skip-existing: true
 
   registry:
     needs: [test, pypi]
