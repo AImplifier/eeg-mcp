@@ -58,9 +58,21 @@ markdown_extensions:
   - admonition
   - attr_list
   - tables
+  - footnotes
   - fenced_code
   - md_in_html
-  - pymdownx.highlight
+  # Without this, every '=== "tab"' block renders as literal text. The
+  # installation and extending guides lean on tabs heavily.
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
