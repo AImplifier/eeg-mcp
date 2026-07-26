@@ -213,10 +213,11 @@ def recording_status(session_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def list_recordings(limit: int = 25, subject: str | None = None) -> dict[str, Any]:
-    """List recordings in the metadata store, newest first.
+    """List recordings in eeg-mcp's own metadata store, newest first.
 
-    Includes recordings written by neuro-mcp if both servers share a
-    ``DATABASE_URL``, so this is the catalogue across both tools.
+    This store belongs to eeg-mcp alone. Analysis tools read from it -- the
+    schema is compatible with neuro-mcp's, so it can open this database and
+    understand every row -- but nothing else writes to it.
 
     Args:
         limit: Maximum number to return.
@@ -232,8 +233,9 @@ def list_recordings(limit: int = 25, subject: str | None = None) -> dict[str, An
         "database_url": config.database_url,
         "record_dir": str(config.record_dir),
         "recordings": rows,
-        "note": "Point neuro-mcp at the same DATABASE_URL to analyse these "
-                "recordings there without an import step.",
+        "note": "This database belongs to eeg-mcp. An analysis tool such as "
+                "neuro-mcp can open and read it directly -- the schema matches "
+                "-- or open any recording's .fif on its own.",
     })
 
 

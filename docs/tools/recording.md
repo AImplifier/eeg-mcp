@@ -101,8 +101,7 @@ result of the last finished recording.
 
 ## `list_recordings`
 
-The catalogue from the metadata store, newest first — **including recordings
-neuro-mcp wrote**, when both share a `DATABASE_URL`.
+The catalogue from eeg-mcp's own metadata store, newest first.
 
 | Arg | Default | Meaning |
 |---|---|---|
@@ -126,31 +125,52 @@ carries signal without annotations. Better than losing the session.
 
 ## The metadata store
 
-Schema-compatible with
-[neuro-mcp](https://github.com/AImplifier/neuro-mcp): the same `subjects`,
-`datasets`, `recordings`, `annotations`, and `audit_log` tables.
+**eeg-mcp owns its database. Nothing else writes to it.**
 
 ```json
 "env": {
-  "DATABASE_URL": "sqlite:////data/neuro/store.db"
+  "EEG_MCP_DATABASE_URL": "sqlite:////data/eeg-mcp/store.db"
 }
 ```
 
-Set the **same** `DATABASE_URL` on both servers and a session recorded here
-appears in neuro-mcp with no import step. `EEG_MCP_DATABASE_URL` overrides it if
-you want them separate. Default is `sqlite:///$EEG_MCP_HOME/eeg_mcp.db`.
+Default is `sqlite:///$EEG_MCP_HOME/eeg_mcp.db`. The bare `DATABASE_URL`
+variable — used by neuro-mcp and many other tools — is **deliberately ignored**,
+so eeg-mcp can never inherit another application's store by accident.
+
+### Readable by neuro-mcp, not shared with it
+
+The schema matches
+[neuro-mcp](https://github.com/AImplifier/neuro-mcp)'s exactly — the same
+`subjects`, `datasets`, `recordings`, `annotations`, and `audit_log` tables — so
+neuro-mcp can **open and read** a database written here with no import or
+conversion step.
+
+That is interoperability, and it is not the same as sharing:
+
+| | |
+|---|---|
+| ✅ neuro-mcp **reads** eeg-mcp's database | The schema is identical, so every row is understood |
+| ✅ neuro-mcp **opens** the `.fif` directly | Standard MNE format; the database is only an index |
+| ❌ The two do **not** write to one store | Separate databases, separate variables, no cross-configuration |
 
 eeg-mcp only ever **adds** rows: a subject if new, a dataset if new, one
 recording, one annotation per event, one audit entry. It never amends or voids —
-those are clinical operations belonging to neuro-mcp, which has the versioning
-machinery. Keeping the write surface this narrow is what makes sharing a
-database with another application safe.
+those are versioned clinical operations that belong to an analysis tool, not to
+an acquisition server.
 
-!!! warning "Schema drift"
-    The models are a deliberate *copy* of neuro-mcp's, not an import, so
-    eeg-mcp does not depend on it. `testing/verify_recording.py` reflects both
-    metadata objects and fails if any shared table diverges — run it after
-    changing either project.
+!!! success "Verified, not just claimed"
+    `testing/verify_recording.py` reflects both projects' schemas and fails if
+    any table diverges, then queries a database eeg-mcp wrote **through
+    neuro-mcp's own ORM** — checking that recordings, subject relationships,
+    provenance and versioned annotations all read back correctly, and that the
+    referenced `.fif` opens with its annotations intact.
+
+    ```
+    PASS  eeg-mcp schema matches neuro-mcp column-for-column
+    PASS  neuro-mcp's ORM reads the recording eeg-mcp wrote  [1 row(s)]
+    PASS  annotations carry neuro-mcp's versioning fields  ['cue_a' v1 active]
+    PASS  neuro-mcp's reader (MNE) opens it with annotations intact  [16 ch, 4 annotations]
+    ```
 
 ---
 

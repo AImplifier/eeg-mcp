@@ -1,13 +1,18 @@
 """Writing recording metadata into a store neuro-mcp can read.
 
-eeg-mcp only ever *adds* rows here: a subject if it is new, a dataset if it is
-new, one recording, and one annotation per event. It never amends or voids —
-those are clinical operations that belong to neuro-mcp, which has the versioning
-machinery for them. Keeping the write surface this narrow is what makes sharing
-a database with another application safe.
+**This store belongs to eeg-mcp alone.** It lives at ``EEG_MCP_DATABASE_URL``
+(default: SQLite under ``EEG_MCP_HOME``). The bare ``DATABASE_URL`` variable
+that neuro-mcp and other tools use is deliberately ignored, so eeg-mcp can never
+inherit — and start writing into — another application's store.
 
-Point both servers at the same ``DATABASE_URL`` and a session recorded here
-appears in neuro-mcp with no import step.
+The schema matches neuro-mcp's so that neuro-mcp can **read** a database written
+here without an import or conversion step. That is interoperability, not a
+shared store: nothing but eeg-mcp writes to this database.
+
+eeg-mcp only ever *adds* rows: a subject if it is new, a dataset if it is new,
+one recording, and one annotation per event. It never amends or voids — those
+are versioned clinical operations that belong to an analysis tool, not to an
+acquisition server.
 """
 
 from __future__ import annotations

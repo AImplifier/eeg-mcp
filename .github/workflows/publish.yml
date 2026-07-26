@@ -1,17 +1,32 @@
-# Publishes to PyPI and the official MCP registry on a version tag.
+# Publishes to PyPI and the official MCP registry.
 #
-# Both steps use OIDC, so no long-lived tokens are stored in the repo:
-#   - PyPI     -> Trusted Publishing (configure at pypi.org before first run)
-#   - Registry -> GitHub OIDC, which proves ownership of the io.github.<org>
-#                 namespace declared in server.json
+# The two are deliberately SEPARATE jobs, and each can be run on its own:
 #
-# Tag and push to trigger:  git tag v0.1.0 && git push origin v0.1.0
+#   * tag push (v*)        -> tests, then PyPI, then the registry
+#   * manual, target=pypi  -> tests, then PyPI only
+#   * manual, target=registry -> tests, then the registry only
+#
+# That separation matters because the two can fail independently. A registry
+# submission that fails after PyPI already accepted the upload must not require
+# re-publishing the package -- PyPI refuses a re-upload of the same version, so
+# a combined job would leave you stuck. Run the registry half again instead.
+#
+# Both use OIDC, so no long-lived tokens are stored in the repo:
+#   PyPI     -> Trusted Publishing (configure at pypi.org before the first run)
+#   Registry -> GitHub OIDC, proving ownership of the io.github.AImplifier
+#               namespace declared in server.json
 name: Publish
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      target:
+        description: "What to publish"
+        type: choice
+        options: [both, pypi, registry]
+        default: both
 
 jobs:
   test:
@@ -22,7 +37,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[lsl,serial,dev]"
-      # Never publish something that has not just passed its own suite.
+      # Never publish anything that has not just passed its own suite.
       - run: python testing/verify.py
       - run: python testing/verify_recording.py
       - run: python testing/verify_processing.py
@@ -31,6 +46,7 @@ jobs:
 
   pypi:
     needs: test
+    if: github.event_name == 'push' || inputs.target != 'registry'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -51,7 +67,14 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 
   registry:
-    needs: pypi
+    needs: [test, pypi]
+    # Runs when PyPI succeeded, and also when the PyPI job was skipped because
+    # this is a registry-only run.
+    if: |
+      always() && !cancelled() &&
+      needs.test.result == 'success' &&
+      (needs.pypi.result == 'success' || needs.pypi.result == 'skipped') &&
+      (github.event_name == 'push' || inputs.target != 'pypi')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -63,9 +86,11 @@ jobs:
           curl -sSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
             | tar xz mcp-publisher
           chmod +x mcp-publisher
-      # PyPI needs a moment to index the new release before the registry can
-      # validate that the package referenced in server.json actually exists.
-      - name: Wait for PyPI to index
+      - name: Wait for PyPI to index the release
+        # The registry validates that the package in server.json actually
+        # exists, and PyPI's index lags the upload by a little. Skipped on a
+        # registry-only run, where the release is already long since indexed.
+        if: needs.pypi.result == 'success'
         run: sleep 90
       - name: Publish to MCP registry
         run: |

@@ -146,6 +146,33 @@ async def test_registration(client: Client, stopped: dict) -> None:
     check("recorded_by identifies the writer", row.get("recorded_by") == "eeg-mcp")
 
 
+def _load_neuro_base():
+    """neuro-mcp's declarative Base, however it happens to be available.
+
+    Tries the installed package first, then a sibling checkout -- which is how
+    the two projects are actually developed side by side, and means the schema
+    diff runs on a dev machine without pulling in neuro-mcp's whole dependency
+    tree just to compare table definitions.
+    """
+    try:
+        from neuro_mcp.db.models import Base
+
+        return Base, "installed package"
+    except ImportError:
+        pass
+
+    sibling = Path(__file__).resolve().parents[2] / "neuro-mcp"
+    if (sibling / "neuro_mcp" / "db" / "models.py").exists():
+        sys.path.insert(0, str(sibling))
+        try:
+            from neuro_mcp.db.models import Base
+
+            return Base, f"sibling checkout ({sibling})"
+        except Exception as exc:
+            print(f"  note: sibling checkout found but not importable: {exc}")
+    return None, None
+
+
 def test_neuro_mcp_compatibility() -> None:
     """The claim that matters: neuro-mcp can read what eeg-mcp wrote."""
     print("\n[compat] schema against neuro-mcp")
@@ -159,12 +186,17 @@ def test_neuro_mcp_compatibility() -> None:
     expected = {"subjects", "datasets", "recordings", "annotations", "audit_log"}
     check("expected tables created", expected <= tables, str(sorted(tables)))
 
-    try:
-        from neuro_mcp.db.models import Base as NeuroBase
-    except ImportError:
-        print("  SKIP  column-level schema diff (neuro-mcp not installed here)")
-        print("        Install it alongside to enable this check.")
+    NeuroBase, source = _load_neuro_base()
+    if NeuroBase is None:
+        print("  SKIP  column-level schema diff (neuro-mcp not importable)")
+        print("        pip install neuro-mcp, or check it out beside eeg-mcp.")
         return
+    print(f"  comparing against neuro-mcp from: {source}")
+
+    shared = set(NeuroBase.metadata.tables) & set(EegBase.metadata.tables)
+    check("the tables eeg-mcp writes all exist in neuro-mcp's schema",
+          {"subjects", "datasets", "recordings", "annotations", "audit_log"}
+          <= shared, str(sorted(shared)))
 
     mismatches = []
     for name, neuro_table in NeuroBase.metadata.tables.items():
@@ -179,6 +211,53 @@ def test_neuro_mcp_compatibility() -> None:
             mismatches.append(f"{name}: {sorted(d[0] for d in diff)}")
     check("eeg-mcp schema matches neuro-mcp column-for-column",
           not mismatches, "; ".join(mismatches[:3]))
+
+    # The schema agreeing is necessary but not sufficient. The claim users will
+    # rely on is that neuro-mcp can *read the rows eeg-mcp wrote*, so do exactly
+    # that: query the same database file through neuro-mcp's own mappers.
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session as SASession
+
+    from neuro_mcp.db.models import Annotation as NAnnotation
+    from neuro_mcp.db.models import Recording as NRecording
+    from neuro_mcp.db.models import Subject as NSubject
+
+    with SASession(engine) as db:
+        recordings = db.scalars(select(NRecording)).all()
+        check("neuro-mcp's ORM reads the recording eeg-mcp wrote",
+              len(recordings) >= 1, f"{len(recordings)} row(s)")
+        if not recordings:
+            return
+        rec = recordings[0]
+        subject = db.get(NSubject, rec.subject_id) if rec.subject_id else None
+        anns = db.scalars(
+            select(NAnnotation).where(NAnnotation.recording_id == rec.id)
+        ).all()
+
+        check("subject resolves through neuro-mcp's relationship",
+              subject is not None and subject.external_id == "P01",
+              str(subject.external_id if subject else None))
+        check("provenance survives the round trip",
+              (rec.provenance or {}).get("task") == "rest"
+              and (rec.provenance or {}).get("recorded_by") == "eeg-mcp",
+              str((rec.provenance or {}).get("task")))
+        check("annotations are readable as neuro-mcp Annotation rows",
+              len(anns) >= 2, f"{len(anns)} annotation(s)")
+        check("annotations carry neuro-mcp's versioning fields",
+              all(a.logical_id and a.version == 1 and a.status == "active"
+                  for a in anns),
+              f"e.g. {anns[0].label!r} v{anns[0].version} {anns[0].status}"
+              if anns else "none")
+
+        # And the file itself must open with the reader neuro-mcp uses.
+        path = Path(rec.source_path)
+        check("the referenced .fif exists where the row says it does",
+              path.exists(), str(path.name))
+        if path.exists():
+            raw = mne.io.read_raw_fif(str(path), preload=False, verbose="ERROR")
+            check("neuro-mcp's reader (MNE) opens it with annotations intact",
+                  len(raw.ch_names) > 0 and len(raw.annotations) >= 2,
+                  f"{len(raw.ch_names)} ch, {len(raw.annotations)} annotations")
 
 
 async def test_replay_what_we_recorded(client: Client, stopped: dict) -> None:

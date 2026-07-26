@@ -13,13 +13,16 @@ the `env` block of your MCP client config (see [Installation](installation.md)).
 | `EEG_MCP_HOME` | `~/.eeg-mcp` | Data home; plots and reports are written under it |
 | `EEG_MCP_RECORDINGS_DIR` | `$EEG_MCP_HOME/recordings` | Root for relative paths given to `start_replay` |
 | `EEG_MCP_RECORD_DIR` | `$EEG_MCP_HOME/recorded` | Where `start_recording` writes new sessions |
-| `DATABASE_URL` | `sqlite:///$EEG_MCP_HOME/eeg_mcp.db` | Recording metadata store. **Set the same value as neuro-mcp to share one store** |
-| `EEG_MCP_DATABASE_URL` | *unset* | Overrides `DATABASE_URL` when you want the two servers kept separate |
+| `EEG_MCP_DATABASE_URL` | `sqlite:///$EEG_MCP_HOME/eeg_mcp.db` | eeg-mcp's own recording metadata store |
 
-!!! tip "Sharing a store with neuro-mcp"
-    `DATABASE_URL` is neuro-mcp's variable, honoured here deliberately: a rig
-    that already configured neuro-mcp shares its store with no extra setup, and
-    a session recorded here appears there with no import step. See
+!!! info "eeg-mcp's database is its own"
+    The bare `DATABASE_URL` variable — the one neuro-mcp and many other tools
+    use — is **deliberately ignored**. Inheriting it would make eeg-mcp write
+    into another application's store without anyone asking for that.
+
+    The schema is compatible with neuro-mcp's, so neuro-mcp can **open and read**
+    a database written here without any import or conversion step. That is
+    interoperability, not a shared store: only eeg-mcp writes to it. See
     [Recording](tools/recording.md#the-metadata-store).
 
 ### Custom processors

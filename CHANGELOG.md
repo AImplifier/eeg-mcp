@@ -70,10 +70,12 @@ First release. **47 MCP tools** over stdio, **225 checks** across five suites.
   are appended to a sidecar as they arrive and the header written up front, so a
   crash leaves recoverable data; `recover_recording` finishes an interrupted
   session.
-- A metadata store schema-compatible with neuro-mcp (`subjects`, `datasets`,
-  `recordings`, `annotations`, `audit_log`). Point both servers at one
-  `DATABASE_URL` and a session recorded here opens there with no import step.
-  eeg-mcp only ever adds rows; amending and voiding stay with neuro-mcp.
+- eeg-mcp's **own** metadata store at `EEG_MCP_DATABASE_URL`, with a schema
+  matching neuro-mcp's (`subjects`, `datasets`, `recordings`, `annotations`,
+  `audit_log`) so an analysis tool can **read** it with no import step. The two
+  projects stay separate: the bare `DATABASE_URL` is deliberately ignored so
+  eeg-mcp can never inherit another application's store. Only ever adds rows;
+  never amends or voids.
 - `list_recordings`, `recording_status`.
 
 ### Visualization

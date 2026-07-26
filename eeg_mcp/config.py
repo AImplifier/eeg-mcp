@@ -54,8 +54,9 @@ class Config:
     recordings_dir: Path
     # Where newly recorded sessions are written.
     record_dir: Path
-    # Metadata store. Schema-compatible with neuro-mcp, so pointing both servers
-    # at the same URL makes a session recorded here appear there directly.
+    # eeg-mcp's own metadata store, always separate from any other tool's.
+    # The schema is compatible with neuro-mcp's so that neuro-mcp can *read* a
+    # recording written here; that is interoperability, not a shared store.
     database_url: str
     # --- Stimulation ---
     # Master switch. While False, hardware backends refuse to open and only the
@@ -84,12 +85,13 @@ class Config:
             record_dir=Path(
                 os.environ.get("EEG_MCP_RECORD_DIR", str(home / "recorded"))
             ).expanduser(),
-            # DATABASE_URL (unprefixed) is neuro-mcp's variable. Honouring it
-            # means a rig that already configured neuro-mcp shares its store
-            # automatically; the prefixed form is the explicit override.
+            # Deliberately only the EEG_MCP_-prefixed variable. The bare
+            # DATABASE_URL belongs to other applications (neuro-mcp uses it),
+            # and inheriting it would make eeg-mcp write into someone else's
+            # store without anyone having asked for that. eeg-mcp always owns
+            # its own database; other tools read from it, they do not share it.
             database_url=(
                 os.environ.get("EEG_MCP_DATABASE_URL")
-                or os.environ.get("DATABASE_URL")
                 or f"sqlite:///{home / 'eeg_mcp.db'}"
             ),
             allow_hardware_stim=_env_bool("EEG_MCP_ALLOW_HARDWARE_STIM", False),

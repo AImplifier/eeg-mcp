@@ -6,13 +6,18 @@
 * eeg-mcp must not depend on neuro-mcp. A real-time acquisition server should
   not drag in MNE-BIDS, source imaging, and a visualization stack just to write
   a row saying "this recording exists".
-* But the two must be able to share one database, so that a session recorded
-  here opens in neuro-mcp with no import step.
+* But an analysis tool should be able to **read** a store written here without
+  an import or conversion step. Matching the schema is what makes that work.
+
+The two projects stay separate: eeg-mcp writes only its own database, at its own
+``EEG_MCP_DATABASE_URL``. Compatibility means neuro-mcp can open that file and
+understand every row; it does not mean the two write to one store.
 
 Copying a schema is normally a bad idea because the copies drift. So the copy is
-paired with an automated check: ``testing/verify_db_compat.py`` reflects both
-metadata objects and fails if any shared table's columns diverge. Run it after
-changing either project.
+paired with an automated check: ``testing/verify_recording.py`` reflects both
+projects' metadata objects, fails if any shared table's columns diverge, and
+then reads a database eeg-mcp wrote back through neuro-mcp's own ORM. Run it
+after changing either project.
 
 Only the tables eeg-mcp actually touches are exercised here (subjects,
 datasets, recordings, annotations, audit_log), but the full set is declared so
