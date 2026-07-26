@@ -4,57 +4,9 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Recording and persistence
-
-- `start_recording` / `stop_recording` write the live session continuously to
-  disk as MNE-native `.fif`, with the event log attached as annotations. Samples
-  are appended to a sidecar as they arrive and the header written up front, so a
-  crash leaves recoverable data; `recover_recording` finishes an interrupted
-  session. Previously nothing but HTML snapshots survived a session.
-- A metadata store schema-compatible with neuro-mcp (`subjects`, `datasets`,
-  `recordings`, `annotations`, `audit_log`). Point both servers at one
-  `DATABASE_URL` and a session recorded here opens there with no import step.
-  eeg-mcp only ever adds rows; amending and voiding stay with neuro-mcp.
-- `list_recordings`, `recording_status`.
-
-### Pluggable real-time processors
-
-- A `Processor` contract for custom real-time code, discovered through
-  `eeg_mcp.processors` entry points, `EEG_MCP_PLUGINS`, or `EEG_MCP_PLUGIN_DIR`.
-  Streaming processors run inside the acquisition loop, so a closed-loop
-  decision needs no agent round-trip.
-- Built-ins: `band_power`, `threshold_trigger`, `artifact_detector`, and
-  `band_tokenizer` for sequence models.
-- `list_processors`, `attach_processor`, `detach_processor`,
-  `processor_status`, `get_processor_output`, `run_processor`,
-  `reset_processors`, `get_tokens`.
-- Plugin failures are contained: errors are counted and a processor is disabled
-  after 10 failures rather than being retried inside the producer loop.
-- Processors can only be provisioned from the server environment. An agent
-  cannot name an import path, because importing a module executes it.
-
-### Monitor controls
-
-- Transport controls on the live monitor — play/pause, restart, skip, scrub,
-  speed, stop, mark, and save report/traces/spectrum. Control requests need a
-  JSON content type on top of the token, forcing a CORS preflight a hostile
-  local page cannot satisfy. `allow_control=false` gives a viewable-only screen.
-
-### Fixed
-
-- Seeking clears the buffer by design, but stopping afterwards left
-  `buffered_sec` at 0 with an error telling the user to wait for a buffer that
-  would never fill. The message is now state-aware and the Save buttons disable
-  when there is nothing to save.
-- BrainFlow's opaque failures (`ANOTHER_BOARD_IS_CREATED_ERROR`,
-  `UNABLE_TO_OPEN_PORT_ERROR`, `BOARD_NOT_READY_ERROR`) are translated into
-  messages that name the fix.
-
 ## [0.1.0] — 2026-07-26
 
-First release. 34 MCP tools over stdio.
+First release. **47 MCP tools** over stdio, **225 checks** across five suites.
 
 ### Acquisition
 
@@ -64,6 +16,9 @@ First release. 34 MCP tools over stdio.
   calls read a live view instead of blocking on a device.
 - `stream_status` reports `throughput_ratio`, which exposes dropped samples
   rather than hiding them.
+- BrainFlow's opaque failures (`ANOTHER_BOARD_IS_CREATED_ERROR`,
+  `UNABLE_TO_OPEN_PORT_ERROR`, `BOARD_NOT_READY_ERROR`) are translated into
+  messages that name the fix.
 
 ### Replay
 
@@ -86,12 +41,40 @@ First release. 34 MCP tools over stdio.
 - `get_band_power`, `get_psd` (BrainFlow Welch with SciPy fallback), and
   `check_signal_quality` with flat / railed / line-noise detection.
 
+### Pluggable real-time processors
+
+- A `Processor` contract for custom real-time code, discovered through
+  `eeg_mcp.processors` entry points, `EEG_MCP_PLUGINS`, or `EEG_MCP_PLUGIN_DIR`.
+  Streaming processors run inside the acquisition loop, so a closed-loop
+  decision needs no agent round-trip.
+- Built-ins: `band_power`, `threshold_trigger`, `artifact_detector`, and
+  `band_tokenizer` for sequence models.
+- `list_processors`, `attach_processor`, `detach_processor`, `processor_status`,
+  `get_processor_output`, `run_processor`, `reset_processors`, `get_tokens`.
+- Plugin failures are contained: errors are counted and a processor is disabled
+  after 10 failures rather than being retried inside the producer loop.
+- Processors can only be provisioned from the server environment. An agent
+  cannot name an import path, because importing a module executes it.
+
 ### Events
 
 - One log for board markers, replayed annotations, dispatched stimulations, and
   manual notes, all on one clock with absolute sample indices.
 - `get_epoch_around_event` for online epoching; verified sample-accurate against
   a synthetic recording with a spike planted at each annotation onset.
+
+### Recording and persistence
+
+- `start_recording` / `stop_recording` write the live session continuously to
+  disk as MNE-native `.fif`, with the event log attached as annotations. Samples
+  are appended to a sidecar as they arrive and the header written up front, so a
+  crash leaves recoverable data; `recover_recording` finishes an interrupted
+  session.
+- A metadata store schema-compatible with neuro-mcp (`subjects`, `datasets`,
+  `recordings`, `annotations`, `audit_log`). Point both servers at one
+  `DATABASE_URL` and a session recorded here opens there with no import step.
+  eeg-mcp only ever adds rows; amending and voiding stay with neuro-mcp.
+- `list_recordings`, `recording_status`.
 
 ### Visualization
 
@@ -127,6 +110,7 @@ First release. 34 MCP tools over stdio.
 - Real amplifiers are untested — only the synthetic board and file replay.
 - Train timing carries a few milliseconds of jitter, adequate for cues and tES
   ramps but not for sub-millisecond rTMS.
-- Long-run (multi-hour) stability is untested.
+- Long-run (multi-hour) stability is untested, as is PostgreSQL for the
+  metadata store (SQLite is exercised).
 
 [0.1.0]: https://github.com/AImplifier/eeg-mcp/releases/tag/v0.1.0
