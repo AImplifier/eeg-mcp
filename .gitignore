@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# MkDocs build output
+docs_site/
+
+# eeg-mcp runtime data
+.eeg-mcp/
+plots/
+*.db
+
+# Generated test fixtures (regenerate: python testing/make_synthetic.py)
+testing/data/
+testing/_tmp/
+*.fif
+*.h5
+
+# Recordings should never be committed -- they may be patient data
+recordings/
+*.edf
+*.bdf
+*.gdf
+*.set
+*.fdt
+*.vhdr
+*.vmrk
+*.xdf
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local settings
+.claude/

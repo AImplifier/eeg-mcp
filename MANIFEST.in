@@ -1,0 +1,17 @@
+include LICENSE
+include NOTICE
+include README.md
+include CHANGELOG.md
+include server.json
+
+# Tests and docs ship in the sdist but not the wheel, so a source download is
+# reproducible end to end.
+recursive-include testing *.py
+recursive-include docs *.md
+include mkdocs.yml
+
+# Never ship generated fixtures, build output, or anything that could be data.
+prune docs_site
+prune testing/data
+global-exclude *.py[cod] __pycache__ *.so
+global-exclude *.edf *.bdf *.gdf *.set *.fif *.xdf

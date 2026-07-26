@@ -1,0 +1,71 @@
+# Publishes to PyPI and the official MCP registry on a version tag.
+#
+# Both steps use OIDC, so no long-lived tokens are stored in the repo:
+#   - PyPI     -> Trusted Publishing (configure at pypi.org before first run)
+#   - Registry -> GitHub OIDC, which proves ownership of the io.github.<org>
+#                 namespace declared in server.json
+#
+# Tag and push to trigger:  git tag v0.1.0 && git push origin v0.1.0
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[lsl,serial,dev]"
+      # Never publish something that has not just passed its own suite.
+      - run: python testing/verify.py
+      - run: python testing/persona_bci_researcher.py
+      - run: python testing/persona_clinician.py
+
+  pypi:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/eeg-mcp
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  registry:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mcp-publisher
+        run: |
+          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+          chmod +x mcp-publisher
+      # PyPI needs a moment to index the new release before the registry can
+      # validate that the package referenced in server.json actually exists.
+      - name: Wait for PyPI to index
+        run: sleep 90
+      - name: Publish to MCP registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

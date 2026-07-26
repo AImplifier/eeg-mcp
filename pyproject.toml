@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eeg-mcp"
+version = "0.1.0"
+description = "A MCP for real-time EEG: BrainFlow streaming with events, wall-clock replay of existing recordings, stateful online DSP, and stimulation event output to software and hardware (TMS/tES) targets."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "eeg-mcp contributors" }]
+keywords = [
+    "eeg", "bci", "brainflow", "mcp", "realtime", "streaming",
+    "neurofeedback", "closed-loop", "tms", "tes", "lsl", "neuroagents",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "brainflow>=5.12",
+    "fastmcp>=2.0",
+    "mne>=1.6",
+    "numpy",
+    "scipy",
+    # BrainFlow's native-library loader calls importlib.resources.files() on a
+    # *module* rather than a package, which raises on Python >= 3.11; it then
+    # falls back to pkg_resources. Without setuptools the DLL never loads, so
+    # this is a real runtime requirement, not build tooling. pkg_resources is
+    # removed in setuptools 81+, hence the ceiling.
+    "setuptools<81",
+]
+
+[project.optional-dependencies]
+# Software stimulation targets and network marker streams.
+lsl = ["pylsl>=1.16"]
+# Serial / TTL trigger delivery to hardware stimulators (TMS, tES, trigger boxes).
+serial = ["pyserial>=3.5"]
+dev = ["pytest>=7", "build", "twine"]
+docs = ["mkdocs>=1.5", "mkdocs-material>=9.5"]
+
+[project.scripts]
+eeg-mcp = "eeg_mcp.server:main"
+
+[project.urls]
+Homepage = "https://aimplifier.github.io/eeg-mcp/"
+Documentation = "https://aimplifier.github.io/eeg-mcp/"
+Repository = "https://github.com/AImplifier/eeg-mcp"
+Changelog = "https://github.com/AImplifier/eeg-mcp/blob/main/CHANGELOG.md"
+Issues = "https://github.com/AImplifier/eeg-mcp/issues"
+
+[tool.setuptools.packages.find]
+include = ["eeg_mcp*"]

@@ -1,0 +1,67 @@
+site_name: eeg-mcp
+site_description: >
+  A MCP for real-time EEG — BrainFlow streaming with events, wall-clock replay of
+  existing recordings, stateful online DSP, live visualization, and stimulation
+  event output to software and hardware (TMS/tES) targets.
+repo_url: https://github.com/AImplifier/eeg-mcp
+repo_name: AImplifier/eeg-mcp
+site_dir: docs_site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - "Tutorial: Your First Real-Time Session": examples/tutorial-first-realtime-session.md
+  - Examples:
+      - Overview: examples/index.md
+      - Replay-Driven Development: examples/replay-driven-development.md
+      - Closed-Loop Neurofeedback: examples/closed-loop-neurofeedback.md
+      - Live Clinical Review: examples/clinical-live-review.md
+      - Stimulation Protocols (TMS/tES): examples/stimulation-protocols.md
+  - Supported Hardware: hardware.md
+  - Safety: safety.md
+  - Configuration: configuration.md
+  - Tool Reference:
+      - Overview: tools/index.md
+      - Acquisition: tools/acquisition.md
+      - Replay: tools/replay.md
+      - Signal Processing: tools/dsp.md
+      - Events: tools/events.md
+      - Visualization: tools/visualization.md
+      - Stimulation: tools/stimulation.md
+  - Testing & Verification: testing.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - fenced_code
+  - md_in_html
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - toc:
+      permalink: true
