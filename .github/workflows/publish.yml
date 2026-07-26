@@ -37,6 +37,10 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[lsl,serial,dev]"
+      # Runs first and fails fast. A registry rejection is only discovered
+      # after the PyPI upload has already succeeded, and PyPI uploads cannot be
+      # repeated -- so metadata problems must be caught before anything ships.
+      - run: python testing/verify_packaging.py
       # Never publish anything that has not just passed its own suite.
       - run: python testing/verify.py
       - run: python testing/verify_recording.py

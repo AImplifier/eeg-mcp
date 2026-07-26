@@ -56,7 +56,7 @@ dependencies = [
 lsl = ["pylsl>=1.16"]
 # Serial / TTL trigger delivery to hardware stimulators (TMS, tES, trigger boxes).
 serial = ["pyserial>=3.5"]
-dev = ["pytest>=7", "build", "twine"]
+dev = ["pytest>=7", "build", "twine", "jsonschema>=4"]
 docs = ["mkdocs>=1.5", "mkdocs-material>=9.5"]
 
 [project.scripts]

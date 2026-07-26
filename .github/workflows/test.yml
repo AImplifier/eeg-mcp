@@ -23,6 +23,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install
         run: pip install -e ".[lsl,serial,dev]"
+      - name: Packaging pre-flight
+        run: python testing/verify_packaging.py
       - name: Correctness suite
         run: python testing/verify.py
       - name: Recording and metadata store
