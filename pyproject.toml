@@ -15,10 +15,23 @@ keywords = [
     "neurofeedback", "closed-loop", "tms", "tes", "lsl", "neuroagents",
 ]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
     "License :: OSI Approved :: BSD License",
-    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Operating System :: OS Independent",
+    # Per-version classifiers, not just ":: 3" -- PyPI's sidebar and the
+    # shields.io pyversions badge both read these, and without them the badge
+    # renders an uninformative bare "python: 3".
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Human Machine Interfaces",
+    "Topic :: Scientific/Engineering :: Visualization",
 ]
 dependencies = [
     "brainflow>=5.12",
