@@ -52,6 +52,11 @@ class Config:
     poll_interval_sec: float
     # Where recordings are looked up when a relative path is given to replay.
     recordings_dir: Path
+    # Where newly recorded sessions are written.
+    record_dir: Path
+    # Metadata store. Schema-compatible with neuro-mcp, so pointing both servers
+    # at the same URL makes a session recorded here appear there directly.
+    database_url: str
     # --- Stimulation ---
     # Master switch. While False, hardware backends refuse to open and only the
     # log/LSL/marker software backends are usable.
@@ -76,6 +81,17 @@ class Config:
             recordings_dir=Path(
                 os.environ.get("EEG_MCP_RECORDINGS_DIR", str(home / "recordings"))
             ).expanduser(),
+            record_dir=Path(
+                os.environ.get("EEG_MCP_RECORD_DIR", str(home / "recorded"))
+            ).expanduser(),
+            # DATABASE_URL (unprefixed) is neuro-mcp's variable. Honouring it
+            # means a rig that already configured neuro-mcp shares its store
+            # automatically; the prefixed form is the explicit override.
+            database_url=(
+                os.environ.get("EEG_MCP_DATABASE_URL")
+                or os.environ.get("DATABASE_URL")
+                or f"sqlite:///{home / 'eeg_mcp.db'}"
+            ),
             allow_hardware_stim=_env_bool("EEG_MCP_ALLOW_HARDWARE_STIM", False),
             default_stim_backend=os.environ.get("EEG_MCP_STIM_BACKEND", "log"),
             serial_port=os.environ.get("EEG_MCP_SERIAL_PORT") or None,

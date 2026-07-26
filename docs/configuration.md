@@ -12,6 +12,26 @@ the `env` block of your MCP client config (see [Installation](installation.md)).
 |---|---|---|
 | `EEG_MCP_HOME` | `~/.eeg-mcp` | Data home; plots and reports are written under it |
 | `EEG_MCP_RECORDINGS_DIR` | `$EEG_MCP_HOME/recordings` | Root for relative paths given to `start_replay` |
+| `EEG_MCP_RECORD_DIR` | `$EEG_MCP_HOME/recorded` | Where `start_recording` writes new sessions |
+| `DATABASE_URL` | `sqlite:///$EEG_MCP_HOME/eeg_mcp.db` | Recording metadata store. **Set the same value as neuro-mcp to share one store** |
+| `EEG_MCP_DATABASE_URL` | *unset* | Overrides `DATABASE_URL` when you want the two servers kept separate |
+
+!!! tip "Sharing a store with neuro-mcp"
+    `DATABASE_URL` is neuro-mcp's variable, honoured here deliberately: a rig
+    that already configured neuro-mcp shares its store with no extra setup, and
+    a session recorded here appears there with no import step. See
+    [Recording](tools/recording.md#the-metadata-store).
+
+### Custom processors
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EEG_MCP_PLUGIN_DIR` | *unset* | Directory of `.py` files; every `Processor` in them is registered |
+| `EEG_MCP_PLUGINS` | *unset* | Comma-separated `module:ClassName` list |
+
+Processors can only be provisioned through the **server's** environment — never
+from a tool call, because importing a module executes it. See
+[Extending](extending.md#making-it-discoverable).
 
 ### Streaming
 

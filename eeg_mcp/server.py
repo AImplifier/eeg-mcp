@@ -19,6 +19,8 @@ from . import tools_dsp  # noqa: E402,F401
 from . import tools_events  # noqa: E402,F401
 from . import tools_stim  # noqa: E402,F401
 from . import tools_viz  # noqa: E402,F401
+from . import tools_record  # noqa: E402,F401
+from . import tools_processing  # noqa: E402,F401
 
 
 def _shutdown() -> None:

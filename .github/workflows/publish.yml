@@ -24,6 +24,8 @@ jobs:
       - run: pip install -e ".[lsl,serial,dev]"
       # Never publish something that has not just passed its own suite.
       - run: python testing/verify.py
+      - run: python testing/verify_recording.py
+      - run: python testing/verify_processing.py
       - run: python testing/persona_bci_researcher.py
       - run: python testing/persona_clinician.py
 

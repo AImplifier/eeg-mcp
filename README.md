@@ -31,6 +31,16 @@ file runs unchanged against hardware. Adds speed, seek, pause, and looping.
 traces, event markers, band power and per-channel quality — plus self-contained
 HTML reports that open on any machine with no internet.
 
+**Record.** Write the session continuously to MNE-native `.fif` with the event
+log attached as annotations, plus a metadata row (subject, task, run) in a store
+schema-compatible with neuro-mcp — so acquisition hands off to analysis with no
+import step. Crash-safe: an interrupted session is recoverable.
+
+**Extend.** Plug in your own real-time processor — feature extractor,
+classifier, artifact gate, or EEG tokenizer for sequence models — and it runs on
+the same footing as the built-ins, inside the acquisition loop.
+See [Extending](https://aimplifier.github.io/eeg-mcp/extending/).
+
 **Stimulate.** One `send_stim_event` contract over pluggable backends: LSL for
 software, BrainFlow's marker channel for sample-aligned embedding, and
 serial/TTL or templated ASCII protocols for hardware including TMS and tES.
@@ -105,7 +115,8 @@ export_report(session_id="r1", notes="Routine review.")
 | [Stimulation Protocols](https://aimplifier.github.io/eeg-mcp/examples/stimulation-protocols/) | TMS and tES through the safety gates |
 | [Supported Hardware](https://aimplifier.github.io/eeg-mcp/hardware/) | All 66 boards, formats, stimulation transports |
 | [Safety](https://aimplifier.github.io/eeg-mcp/safety/) | **Read before connecting a stimulator** |
-| [Tool Reference](https://aimplifier.github.io/eeg-mcp/tools/) | All 34 tools |
+| [Extending](https://aimplifier.github.io/eeg-mcp/extending/) | Write a custom processor or EEG tokenizer |
+| [Tool Reference](https://aimplifier.github.io/eeg-mcp/tools/) | All 47 tools |
 
 ---
 
@@ -168,16 +179,18 @@ nothing.
 ## Verify
 
 ```bash
-python testing/verify.py                    # 57 checks
-python testing/persona_bci_researcher.py    # 24 checks
-python testing/persona_clinician.py         # 45 checks
+python testing/verify.py                    # core correctness
+python testing/verify_recording.py          # recording + metadata store
+python testing/verify_processing.py         # plugin processors
+python testing/persona_bci_researcher.py    # engineer workflow
+python testing/persona_clinician.py         # clinician workflow
 ```
 
-All three drive the real server through FastMCP's in-memory client. The persona
-suites assert against planted ground truth — including that a spike planted at an
-annotation onset lands at **t = 0 ± 0 ms** in the extracted epoch, which proves
-annotation timing, replay clock, ring-buffer indexing and epoch extraction all
-agree.
+All five drive the real server through FastMCP's in-memory client and assert
+against planted ground truth — including that a spike planted at an annotation
+onset lands at **t = 0 ± 0 ms** in the extracted epoch, which proves annotation
+timing, replay clock, ring-buffer indexing and epoch extraction all agree; and
+that a deliberately broken plugin cannot stop acquisition.
 
 → [What is and is not covered](https://aimplifier.github.io/eeg-mcp/testing/)
 

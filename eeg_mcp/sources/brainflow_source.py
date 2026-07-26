@@ -216,7 +216,34 @@ class BrainFlowSource(StreamSource):
     def start(self) -> None:
         if self._started:
             return
-        self._board.prepare_session()
+        try:
+            self._board.prepare_session()
+        except Exception as exc:
+            # BrainFlow's error codes are opaque; translate the ones a user will
+            # actually hit into something that names the fix.
+            message = str(exc)
+            if "ANOTHER_BOARD_IS_CREATED" in message:
+                raise RuntimeError(
+                    f"Board {self.board_id} is already open in this process. "
+                    "BrainFlow allows only one session per board at a time -- "
+                    "including the synthetic board. Call list_sessions to find "
+                    "the session holding it and stop_stream that one first, or "
+                    "use start_replay if you wanted a second independent source."
+                ) from exc
+            if "UNABLE_TO_OPEN_PORT" in message:
+                port = self._requested_params.get("serial_port", "(unset)")
+                raise RuntimeError(
+                    f"Could not open serial port '{port}' for board "
+                    f"{self.board_id}. Check the port name, that no other "
+                    "software holds it, and that you have permission (on Linux, "
+                    "add yourself to the 'dialout' group)."
+                ) from exc
+            if "BOARD_NOT_READY" in message:
+                raise RuntimeError(
+                    f"Board {self.board_id} did not become ready. It may be off, "
+                    "out of range, or still connected to another application."
+                ) from exc
+            raise
         self._board.start_stream(self._ring_buffer_size)
         self._started = True
 

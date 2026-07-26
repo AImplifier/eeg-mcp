@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import threading
 import traceback
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -28,10 +29,14 @@ import numpy as np
 from .config import get_config
 from .dsp import FilterChain, FilterSpec
 from .events import EventLog
+from .processing.base import Processor, ProcessorContext, ProcessorOutput
 from .ring import RingBuffer
 from .sources.base import StreamSource
 from .stim.base import StimBackend, StimCommand
 from .utils import now
+
+# Outputs kept per processor. Enough to see a trend without unbounded growth.
+_PROCESSOR_HISTORY = 512
 
 
 @dataclass
@@ -46,6 +51,10 @@ class StreamSession:
     filtered_buffer: RingBuffer | None = None
     stim_backends: dict[str, StimBackend] = field(default_factory=dict)
     default_stim_backend: str | None = None
+    recorder: Any = None  # Recorder | None; set by start_recording
+    recording_result: dict[str, Any] | None = None
+    processors: dict[str, Processor] = field(default_factory=dict)
+    processor_outputs: dict[str, deque] = field(default_factory=dict)
     history: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -61,6 +70,9 @@ class StreamSession:
     _thread: threading.Thread | None = field(default=None, repr=False)
     _stop: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # Built once and reused: rebuilding the callback closures on every chunk
+    # would allocate needlessly inside the acquisition loop.
+    _processor_context: ProcessorContext | None = field(default=None, repr=False)
 
     # --- lifecycle --------------------------------------------------------
 
@@ -95,6 +107,13 @@ class StreamSession:
             # device must not hang the whole MCP server.
             thread.join(timeout=5.0)
         self._thread = None
+        # Finalise before releasing the device: a session stopped mid-recording
+        # must still produce a readable file rather than leaving a sidecar
+        # behind that someone has to know to recover.
+        try:
+            self.finish_recording()
+        except Exception as exc:
+            self.log(f"recording finalise failed: {exc}")
         try:
             self.source.stop()
         finally:
@@ -116,6 +135,7 @@ class StreamSession:
                 self.poll_count += 1
 
                 if chunk.n_samples:
+                    filtered = None
                     with self._lock:
                         before = self.raw_buffer.total_written
                         self.raw_buffer.write(chunk.data, chunk.timestamps)
@@ -123,6 +143,16 @@ class StreamSession:
                         if self.filtered_buffer is not None and len(self.chain):
                             filtered = self.chain.process(chunk.data)
                             self.filtered_buffer.write(filtered, chunk.timestamps)
+
+                    # Outside the lock: this touches the disk, and holding the
+                    # session lock across a write would stall every reader.
+                    # The recorder gets the *raw* chunk -- the amplifier's
+                    # output is the thing that cannot be reconstructed later.
+                    if self.recorder is not None and not self.recorder.closed:
+                        self.recorder.write(chunk.data, chunk.timestamps)
+
+                    if self.processors:
+                        self._run_processors(chunk.data, filtered, chunk.timestamps)
 
                     for event in chunk.events:
                         offset = int(
@@ -156,6 +186,115 @@ class StreamSession:
                 self.log(f"producer error: {self.last_error.splitlines()[-1]}")
                 break
             self._stop.wait(interval)
+
+    # --- processors -------------------------------------------------------
+
+    def make_processor_context(self) -> ProcessorContext:
+        """Bind session callbacks so a processor can act, not just report."""
+
+        def emit_event(label: str, value: float | None = None,
+                       payload: dict[str, Any] | None = None,
+                       duration: float = 0.0):
+            return self.events.append(
+                label=label, origin="manual", timestamp=now(), value=value,
+                duration=duration, sample_index=self.raw_buffer.total_written,
+                payload={**(payload or {}), "via": "processor"},
+            )
+
+        def stimulate(label: str, value: float = 1.0, **kwargs: Any):
+            return self.dispatch_stim(
+                StimCommand(label=label, value=float(value), **kwargs)
+            )
+
+        info = self.source.info
+        return ProcessorContext(
+            session_id=self.session_id, sfreq=info.sfreq,
+            ch_names=list(info.ch_names), emit_event=emit_event,
+            log=self.log, stimulate=stimulate,
+        )
+
+    def attach_processor(self, processor: Processor) -> Processor:
+        context = self.make_processor_context()
+        processor.setup(context)
+        with self._lock:
+            existing = self.processors.get(processor.name)
+            if existing is not None:
+                try:
+                    existing.teardown()
+                except Exception:
+                    pass
+            self.processors[processor.name] = processor
+            self.processor_outputs[processor.name] = deque(maxlen=_PROCESSOR_HISTORY)
+        self.log(f"attached processor '{processor.name}'")
+        return processor
+
+    def detach_processor(self, name: str) -> bool:
+        with self._lock:
+            processor = self.processors.pop(name, None)
+            self.processor_outputs.pop(name, None)
+        if processor is None:
+            return False
+        try:
+            processor.teardown()
+        except Exception:
+            pass
+        self.log(f"detached processor '{name}'")
+        return True
+
+    def _run_processors(
+        self, raw: np.ndarray, filtered: np.ndarray | None, timestamps: np.ndarray
+    ) -> None:
+        """Feed streaming processors. Runs in the producer thread, so it is
+        wrapped in error containment -- a plugin must not stop acquisition."""
+        context = self._processor_context
+        if context is None:
+            context = self._processor_context = self.make_processor_context()
+        for name, processor in list(self.processors.items()):
+            if not processor.streaming or not processor.enabled:
+                continue
+            data = filtered if (processor.uses == "filtered" and filtered is not None) \
+                else raw
+            result = processor._invoke(data, timestamps, context)
+            if result is not None:
+                history = self.processor_outputs.get(name)
+                if history is not None:
+                    history.append(ProcessorOutput(
+                        timestamp=float(timestamps[-1]) if timestamps.size else now(),
+                        value=result,
+                    ))
+
+    def reset_processors(self) -> None:
+        for processor in self.processors.values():
+            try:
+                processor.reset()
+            except Exception:
+                pass
+        for history in self.processor_outputs.values():
+            history.clear()
+
+    # --- recording --------------------------------------------------------
+
+    @property
+    def is_recording(self) -> bool:
+        return self.recorder is not None and not self.recorder.closed
+
+    def finish_recording(self, keep_sidecar: bool = False) -> dict[str, Any] | None:
+        """Close the recorder, writing the event log in as annotations.
+
+        Idempotent: calling it again returns the stored result rather than
+        raising, so ``stop_recording`` and ``stop_stream`` can both call it.
+        """
+        if self.recorder is None:
+            return None
+        if self.recorder.closed:
+            return self.recording_result
+        events = [e.as_dict() for e in self.events.query(limit=0)]
+        result = self.recorder.close(events, keep_sidecar=keep_sidecar)
+        self.recording_result = result
+        self.log(
+            f"recording finished: {result.get('fif_path') or result.get('reason')}"
+        )
+        return result
 
     # --- filtering --------------------------------------------------------
 
@@ -333,6 +472,13 @@ class StreamSession:
         }
         if hasattr(self.source, "position"):
             status["replay"] = self.source.position()
+        status["recording"] = (
+            self.recorder.status() if self.recorder is not None else {"recording": False}
+        )
+        if self.recording_result is not None:
+            status["last_recording"] = {
+                k: v for k, v in self.recording_result.items() if k != "annotations"
+            }
         return status
 
 

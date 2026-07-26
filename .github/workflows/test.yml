@@ -25,6 +25,10 @@ jobs:
         run: pip install -e ".[lsl,serial,dev]"
       - name: Correctness suite
         run: python testing/verify.py
+      - name: Recording and metadata store
+        run: python testing/verify_recording.py
+      - name: Plugin processors
+        run: python testing/verify_processing.py
       - name: BCI engineer persona
         run: python testing/persona_bci_researcher.py
       - name: Clinician persona

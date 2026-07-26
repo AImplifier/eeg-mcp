@@ -4,9 +4,11 @@ Three suites, all driving the real server through FastMCP's in-memory client —
 no mocks of the acquisition, DSP, or stimulation paths.
 
 ```bash
-python testing/verify.py                    # 57 checks
-python testing/persona_bci_researcher.py    # 24 checks
-python testing/persona_clinician.py         # 45 checks
+python testing/verify.py                    # core correctness
+python testing/verify_recording.py          # recording + metadata store
+python testing/verify_processing.py         # plugin processors
+python testing/persona_bci_researcher.py    # engineer workflow
+python testing/persona_clinician.py         # clinician workflow
 ```
 
 Each prints `PASS`/`FAIL` per check and exits non-zero on any failure.
@@ -42,6 +44,40 @@ first assertion would pass trivially on any implementation.
 - Error messages naming the offending value
 
 ---
+
+## `verify_recording.py` — persistence
+
+Round-trips, not "did a file appear":
+
+- the recorded `.fif` reopens with the right shape, rate and channel names;
+- **the amplitude survives the microvolt → volt conversion** — writing µV as if
+  they were V is a 1e6 error no shape assertion would catch;
+- events logged during recording come back as annotations at the right onsets,
+  in the right order;
+- the metadata row is readable, with subject/task/run/session preserved;
+- the crash-recovery sidecar is cleaned up on success and the header retained;
+- **a recording made here replays here** — the loop closes;
+- stopping the stream finalises an open recording rather than abandoning it.
+
+It also diffs the database schema against neuro-mcp's column-for-column when
+neuro-mcp is installed, so the vendored copy cannot drift silently.
+
+## `verify_processing.py` — the plugin system
+
+The central test **writes a plugin to a temp directory** and points
+`EEG_MCP_PLUGIN_DIR` at it — exactly what a user following the
+[Extending guide](extending.md) does. It then asserts the plugin is discovered,
+attributed to its source, attachable, executed in the producer thread, and able
+to emit events into the session log.
+
+Two assertions worth singling out:
+
+- **A broken plugin cannot stop acquisition.** A processor that always raises is
+  attached; errors are counted, it is auto-disabled after 10 failures, healthy
+  processors keep running, and `throughput_ratio` stays at 1.0.
+- **Arbitrary import paths are refused.** `os.system`, `builtins:eval` and an
+  internal class are all rejected, because a tool that loaded a dotted path from
+  a model would be arbitrary code execution.
 
 ## `persona_bci_researcher.py` — the engineer's questions
 
@@ -132,6 +168,10 @@ replay. Board-specific behaviour — dropouts, driver quirks, reconnection — i
 untested.
 
 **Long-run stability** beyond a few minutes is untested. Ring buffer wrap is
-covered as a unit test, but not multi-hour sessions.
+covered as a unit test, but recordings of hours, and the disk-space behaviour
+that goes with them, are not.
+
+**PostgreSQL is untested.** The metadata store is exercised on SQLite only,
+though the models use portable types throughout.
 
 Contributions with access to real hardware are welcome.

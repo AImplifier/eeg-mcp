@@ -38,6 +38,7 @@ nav:
       - Closed-Loop Neurofeedback: examples/closed-loop-neurofeedback.md
       - Live Clinical Review: examples/clinical-live-review.md
       - Stimulation Protocols (TMS/tES): examples/stimulation-protocols.md
+  - "Extending: Custom Processing & Tokenization": extending.md
   - Supported Hardware: hardware.md
   - Safety: safety.md
   - Configuration: configuration.md
@@ -46,6 +47,8 @@ nav:
       - Acquisition: tools/acquisition.md
       - Replay: tools/replay.md
       - Signal Processing: tools/dsp.md
+      - Custom Processors: tools/processing.md
+      - Recording: tools/recording.md
       - Events: tools/events.md
       - Visualization: tools/visualization.md
       - Stimulation: tools/stimulation.md

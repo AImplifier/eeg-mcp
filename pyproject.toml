@@ -26,6 +26,10 @@ dependencies = [
     "mne>=1.6",
     "numpy",
     "scipy",
+    # Recording metadata store. The schema mirrors neuro-mcp's so both servers
+    # can share one DATABASE_URL and a session recorded here opens there
+    # directly. SQLite needs no server, so this stays a light dependency.
+    "sqlalchemy>=2.0",
     # BrainFlow's native-library loader calls importlib.resources.files() on a
     # *module* rather than a package, which raises on Python >= 3.11; it then
     # falls back to pkg_resources. Without setuptools the DLL never loads, so

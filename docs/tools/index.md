@@ -1,7 +1,9 @@
 # Tool Reference
 
-**34 tools** in six groups. Every tool takes a `session_id` except `list_boards`,
-`list_sessions`, `list_monitors`, `list_stim_backends`, and `inspect_recording`.
+**47 tools** in eight groups. Every tool takes a `session_id` except
+`list_boards`, `list_sessions`, `list_monitors`, `list_stim_backends`,
+`list_processors`, `list_recordings`, `recover_recording`, and
+`inspect_recording`.
 
 ## Call order
 
@@ -28,6 +30,8 @@ flowchart TD
 | **[Acquisition](acquisition.md)** | `list_boards`, `start_stream`, `stop_stream`, `list_sessions`, `stream_status`, `read_window`, `get_channels` | Open a board, read the buffer |
 | **[Replay](replay.md)** | `inspect_recording`, `start_replay`, `replay_control`, `list_recording_events` | Play a recording at wall-clock rate |
 | **[Signal Processing](dsp.md)** | `set_filters`, `clear_filters`, `get_band_power`, `get_psd`, `check_signal_quality` | Filter online, compute features |
+| **[Custom Processors](processing.md)** | `list_processors`, `attach_processor`, `detach_processor`, `processor_status`, `get_processor_output`, `run_processor`, `reset_processors`, `get_tokens` | Plug in your own real-time code |
+| **[Recording](recording.md)** | `start_recording`, `stop_recording`, `recording_status`, `list_recordings`, `recover_recording` | Persist a session and register it |
 | **[Events](events.md)** | `log_event`, `get_events`, `get_epoch_around_event`, `clear_events` | The unified event log |
 | **[Visualization](visualization.md)** | `start_monitor`, `stop_monitor`, `list_monitors`, `plot_stream`, `plot_spectrum`, `export_report` | Live view and HTML output |
 | **[Stimulation](stimulation.md)** | `list_stim_backends`, `attach_stim_backend`, `detach_stim_backend`, `arm_stim`, `disarm_stim`, `send_stim_event`, `send_stim_train`, `stim_status` | Dispatch events to software and hardware |
