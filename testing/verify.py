@@ -301,6 +301,386 @@ async def verify_replay(client: Client) -> None:
     check("replay stops cleanly", stopped["stopped"] is True)
 
 
+async def verify_lsl(client: Client) -> None:
+    print("\n[lsl] attaching to an existing outlet")
+    try:
+        import pylsl
+    except ImportError:
+        skip("lsl suite", "pylsl not installed (pip install eeg-mcp[lsl])")
+        return
+
+    import threading
+
+    n_ch, sfreq = 4, 256.0
+    stop_event = threading.Event()
+
+    def publish() -> None:
+        info = pylsl.StreamInfo("verify-lsl", "EEG", n_ch, sfreq, "float32", "verify1")
+        chans = info.desc().append_child("channels")
+        for name in ("TP9", "AF7", "AF8", "TP10"):
+            chans.append_child("channel").append_child_value("label", name)
+        outlet = pylsl.StreamOutlet(info)
+        t = 0
+        while not stop_event.is_set():
+            outlet.push_sample([float(t % n_ch)] * n_ch)
+            t += 1
+            time.sleep(1.0 / sfreq)
+
+    thread = threading.Thread(target=publish, daemon=True)
+    thread.start()
+    try:
+        time.sleep(1.0)  # let the outlet become resolvable
+        started = await call(client, "start_stream", session_id="lsl1", board="lsl",
+                             params={"name": "verify-lsl"})
+        check("lsl stream starts", started["started"] is True)
+        check("lsl source reports its kind", started["source"]["kind"] == "lsl",
+              started["source"]["kind"])
+        check("lsl channel labels read from the outlet",
+              started["source"]["ch_names"] == ["TP9", "AF7", "AF8", "TP10"],
+              str(started["source"]["ch_names"]))
+
+        time.sleep(1.5)
+        window = await call(client, "read_window", session_id="lsl1", seconds=1.0)
+        check("lsl samples reach the ring buffer", window["n_samples"] > 0,
+              str(window["n_samples"]))
+        check("lsl timestamps are Unix epoch, not the LSL clock",
+              abs(window["t_end"] - time.time()) < 5.0,
+              f"t_end={window['t_end']} now={time.time()}")
+
+        stopped = await call(client, "stop_stream", session_id="lsl1")
+        check("lsl stream stops cleanly", stopped["stopped"] is True)
+    finally:
+        stop_event.set()
+        thread.join(timeout=2.0)
+
+    try:
+        await call(client, "start_stream", session_id="lsl2", board="lsl",
+                   params={"name": "no-such-outlet", "resolve_timeout": 0.5})
+        check("lsl rejects a missing outlet", False, "no error raised")
+    except Exception as exc:
+        check("lsl rejects a missing outlet", "No LSL stream found" in str(exc),
+              str(exc)[:100])
+
+
+async def verify_lsl_reconnect(client: Client) -> None:
+    """A dropped BLE bridge is the normal case for this source, not an edge
+    case -- streaming a real Muse S Athena's EEG+ACC+GYRO+OPTICS together was
+    observed to disconnect within one to three minutes on Windows. This
+    reproduces that shape without hardware: kill the outlet mid-stream,
+    confirm the session survives disconnected (no last_error, no crash), then
+    republish under the same source_id and confirm it reattaches on its own
+    and logs the gap -- rather than silently sitting on stale data forever."""
+    print("\n[lsl] reconnect after the outlet drops mid-stream")
+    try:
+        import pylsl
+    except ImportError:
+        skip("lsl reconnect suite", "pylsl not installed (pip install eeg-mcp[lsl])")
+        return
+
+    import gc
+    import threading
+
+    n_ch, sfreq, source_id = 4, 256.0, "verify-reconnect-device"
+
+    def publish(outlet_name: str, stop_event: threading.Event) -> None:
+        info = pylsl.StreamInfo(outlet_name, "EEG", n_ch, sfreq, "float32", source_id)
+        outlet = pylsl.StreamOutlet(info)
+        t = 0
+        while not stop_event.is_set():
+            outlet.push_sample([float(t % n_ch)] * n_ch)
+            t += 1
+            time.sleep(1.0 / sfreq)
+        del outlet  # let pylsl retract the stream so a fresh one can take its place
+
+    stop_a = threading.Event()
+    thread_a = threading.Thread(target=publish, args=("verify-lsl-rc", stop_a),
+                                daemon=True)
+    thread_a.start()
+    thread_b: threading.Thread | None = None
+    try:
+        time.sleep(1.0)
+        started = await call(
+            client, "start_stream", session_id="lsl_rc", board="lsl",
+            params={"name": "verify-lsl-rc", "stale_after_sec": 1.0},
+        )
+        check("reconnect: stream starts", started["started"] is True)
+
+        time.sleep(1.5)
+        window = await call(client, "read_window", session_id="lsl_rc", seconds=1.0)
+        check("reconnect: samples flow before the drop", window["n_samples"] > 0,
+              str(window["n_samples"]))
+
+        # Kill the outlet -- simulates the BLE bridge dying, same as we saw
+        # against real hardware.
+        stop_a.set()
+        thread_a.join(timeout=2.0)
+        gc.collect()
+
+        time.sleep(3.0)  # past stale_after_sec (1s) + a reconnect attempt cycle
+        status = await call(client, "stream_status", session_id="lsl_rc")
+        check("reconnect: session survives disconnected, not crashed",
+              status["running"] is True and status["last_error"] is None,
+              str(status["last_error"]))
+        check("reconnect: connection reports disconnected",
+              status["connection"]["connected"] is False, str(status["connection"]))
+
+        # Republish under the *same* source_id -- the bridge tool restarting.
+        stop_b = threading.Event()
+        thread_b = threading.Thread(target=publish, args=("verify-lsl-rc", stop_b),
+                                    daemon=True)
+        thread_b.start()
+        time.sleep(2.5)  # resolve (<=1s) + open + a couple of poll cycles
+
+        status = await call(client, "stream_status", session_id="lsl_rc")
+        check("reconnect: connection re-established",
+              status["connection"]["connected"] is True, str(status["connection"]))
+        check("reconnect: exactly one reconnect counted",
+              status["connection"]["reconnect_count"] == 1,
+              str(status["connection"]))
+
+        events = await call(client, "get_events", session_id="lsl_rc",
+                            origin="annotation")
+        reconnects = [e for e in events["events"] if e["label"] == "source_reconnected"]
+        check("reconnect: gap logged as an event, not left silent",
+              len(reconnects) == 1, str(len(reconnects)))
+        if reconnects:
+            check("reconnect: logged gap is a plausible, positive duration",
+                  0.0 < reconnects[0]["value"] < 30.0, str(reconnects[0]["value"]))
+
+        window2 = await call(client, "read_window", session_id="lsl_rc", seconds=1.0)
+        check("reconnect: fresh samples resume after reattaching",
+              abs(window2["t_end"] - time.time()) < 5.0,
+              f"t_end={window2['t_end']} now={time.time()}")
+
+        await call(client, "stop_stream", session_id="lsl_rc")
+        stop_b.set()
+    finally:
+        stop_a.set()
+        thread_a.join(timeout=2.0)
+        if thread_b is not None:
+            thread_b.join(timeout=2.0)
+
+
+async def verify_lsl_zombie_outlet(client: Client) -> None:
+    """The bug actually found running against real hardware for an extended
+    session: a bridge process exits, its LSL announcement is not retracted
+    instantly, and a reconnect that only checks source_id/shape can happily
+    "recover" onto that dead outlet and sit there forever -- which is exactly
+    what happened to one of four simultaneous real streams (EEG/ACC/GYRO
+    recovered correctly; OPTICS silently locked onto a zombie for the rest of
+    the session). Reproduces it directly: an outlet that keeps resolving and
+    shape-matching but has gone silent must be refused, and a *genuinely*
+    fresh outlet under the same source_id, tested separately, must still be
+    accepted."""
+    print("\n[lsl] refuses a zombie outlet that matches but never produces")
+    try:
+        import pylsl
+    except ImportError:
+        skip("lsl zombie-outlet suite", "pylsl not installed (pip install eeg-mcp[lsl])")
+        return
+
+    import gc
+    import threading
+
+    n_ch, sfreq, source_id = 4, 256.0, "verify-zombie-device"
+
+    def publish(stop_event: threading.Event) -> None:
+        info = pylsl.StreamInfo("verify-lsl-zombie", "EEG", n_ch, sfreq, "float32",
+                                source_id)
+        outlet = pylsl.StreamOutlet(info)
+        t = 0
+        while not stop_event.is_set():
+            outlet.push_sample([float(t % n_ch)] * n_ch)
+            t += 1
+            time.sleep(1.0 / sfreq)
+        del outlet  # retract it -- phase 2 needs the name genuinely free
+
+    # Phase 1: outlet streams briefly, then goes silent while the underlying
+    # StreamOutlet object is still referenced (thread just stops pushing) --
+    # still resolvable by source_id, still the right shape, producing nothing.
+    # This, not a torn-down connection, is the shape of the real bug.
+    stop_silent = threading.Event()
+    silence_flag = threading.Event()  # set once the publisher should go quiet
+
+    def publish_then_go_silent() -> None:
+        info = pylsl.StreamInfo("verify-lsl-zombie", "EEG", n_ch, sfreq, "float32",
+                                source_id)
+        outlet = pylsl.StreamOutlet(info)
+        t = 0
+        while not stop_silent.is_set():
+            if not silence_flag.is_set():
+                outlet.push_sample([float(t % n_ch)] * n_ch)
+                t += 1
+            time.sleep(1.0 / sfreq)
+        del outlet
+
+    thread_a = threading.Thread(target=publish_then_go_silent, daemon=True)
+    thread_a.start()
+    try:
+        time.sleep(1.0)
+        started = await call(
+            client, "start_stream", session_id="lsl_zombie", board="lsl",
+            params={"name": "verify-lsl-zombie", "stale_after_sec": 1.0},
+        )
+        check("zombie: stream starts", started["started"] is True)
+        time.sleep(1.5)
+        window = await call(client, "read_window", session_id="lsl_zombie", seconds=1.0)
+        check("zombie: samples flow before going silent", window["n_samples"] > 0,
+              str(window["n_samples"]))
+
+        silence_flag.set()  # outlet object stays alive; just stops producing
+        time.sleep(4.0)  # past stale_after_sec + several reconnect attempts
+
+        status = await call(client, "stream_status", session_id="lsl_zombie")
+        check(
+            "zombie: reconnect refuses the dead-but-still-resolvable outlet",
+            status["connection"]["connected"] is False
+            and status["connection"]["reconnect_count"] == 0,
+            str(status["connection"]),
+        )
+    finally:
+        stop_silent.set()
+        thread_a.join(timeout=2.0)
+        gc.collect()  # retract the zombie so phase 2 gets a clean name
+
+    # Phase 2: a genuinely fresh, actually-producing outlet under the same
+    # source_id -- the real recovery case, tested in isolation so it cannot
+    # be satisfied by accidentally re-resolving phase 1's zombie.
+    stop_b = threading.Event()
+    thread_b = threading.Thread(target=publish, args=(stop_b,), daemon=True)
+    thread_b.start()
+    try:
+        time.sleep(2.5)
+        status = await call(client, "stream_status", session_id="lsl_zombie")
+        check(
+            "zombie: reconnects once a genuinely live outlet appears",
+            status["connection"]["connected"] is True
+            and status["connection"]["reconnect_count"] == 1,
+            str(status["connection"]),
+        )
+        window2 = await call(client, "read_window", session_id="lsl_zombie", seconds=1.0)
+        check("zombie: fresh samples resume after the real reconnect",
+              window2["n_samples"] > 0, str(window2["n_samples"]))
+        await call(client, "stop_stream", session_id="lsl_zombie")
+    finally:
+        stop_b.set()
+        thread_b.join(timeout=2.0)
+
+
+async def verify_lsl_sibling_streams(client: Client) -> None:
+    """The real second bug found on hardware, distinct from the zombie-outlet
+    case above: a single muselsl process publishes EEG/ACC/GYRO/OPTICS as
+    four *sibling* outlets that all share one source_id ("Muse<mac>" -- see
+    muselsl/lsl_outlet.py's build_outlet, which passes the same
+    address-derived source_id for every sensor type), differing only in
+    ``type``. A reconnect that resolves by source_id alone cannot tell them
+    apart -- resolve_byprop is free to hand back a different sibling, whose
+    shape then fails validation, leaving that source stuck retrying forever
+    while another session's reconnect recovers by the luck of which sibling
+    comes back first. This is exactly the "some streams stay frozen after a
+    bridge restart, others don't" pattern observed against a real Muse S
+    Athena (EEG/OPTICS recovering while ACC/GYRO stayed stale for minutes).
+    Reproduces it with two simultaneous sibling outlets sharing one
+    source_id (EEG-shaped and ACC-shaped). The deterministic check is on the
+    mechanism itself -- connection_status()['resolves_by'] must key off the
+    stream-specific discriminator (type/name), not source_id, since
+    resolve_byprop's own ordering when several outlets share a source_id
+    turned out to be unreliable in practice (sometimes returning only the
+    first-registered sibling, sometimes both) -- an end-to-end reconnect
+    could pass by luck even on the old, buggy resolve-by-source_id code.
+    The reconnect-and-check-shape run below is kept as a behavioral sanity
+    check on top of that, not as the sole guard."""
+    print("\n[lsl] reconnects the right sibling when several outlets share one source_id")
+    try:
+        import pylsl
+    except ImportError:
+        skip("lsl sibling-stream suite", "pylsl not installed (pip install eeg-mcp[lsl])")
+        return
+
+    import gc
+    import threading
+
+    source_id = "verify-shared-device"
+
+    def publish_pair(stop_event: threading.Event) -> None:
+        eeg_info = pylsl.StreamInfo("Muse", "EEG", 4, 256.0, "float32", source_id)
+        acc_info = pylsl.StreamInfo("Muse", "ACC", 3, 52.0, "float32", source_id)
+        eeg_outlet = pylsl.StreamOutlet(eeg_info)
+        acc_outlet = pylsl.StreamOutlet(acc_info)
+        t = 0
+        while not stop_event.is_set():
+            eeg_outlet.push_sample([float(t % 4)] * 4)
+            if t % 5 == 0:
+                acc_outlet.push_sample([float(t % 3)] * 3)
+            t += 1
+            time.sleep(1.0 / 256.0)
+        del eeg_outlet, acc_outlet  # retract both so the restart gets clean names
+
+    stop_a = threading.Event()
+    thread_a = threading.Thread(target=publish_pair, args=(stop_a,), daemon=True)
+    thread_a.start()
+    thread_b: threading.Thread | None = None
+    stop_b = threading.Event()
+    try:
+        time.sleep(1.0)
+        started = await call(
+            client, "start_stream", session_id="lsl_sibling", board="lsl",
+            params={"stream_type": "ACC", "stale_after_sec": 1.0},
+        )
+        check("sibling: pins to the ACC-shaped outlet, not its EEG sibling",
+              started["source"]["n_channels"] == 3, str(started["source"]))
+
+        status0 = await call(client, "stream_status", session_id="lsl_sibling")
+        resolves_by = status0["connection"]["resolves_by"]
+        check(
+            "sibling: reconnect resolves by type/name, not the shared source_id "
+            "(the actual fix -- source_id alone can't tell siblings apart)",
+            resolves_by == {"type": "ACC"}, str(resolves_by),
+        )
+        check("sibling: source_id is still tracked, as an extra same-device check",
+              status0["connection"]["source_id"] == source_id,
+              str(status0["connection"]["source_id"]))
+
+        time.sleep(1.5)
+        window = await call(client, "read_window", session_id="lsl_sibling", seconds=1.0)
+        check("sibling: samples flow before the drop", window["n_samples"] > 0,
+              str(window["n_samples"]))
+
+        # Simulate the bridge restart: both siblings drop together, then both
+        # come back together, still sharing the same source_id -- the shape
+        # a real muselsl restart takes.
+        stop_a.set()
+        thread_a.join(timeout=2.0)
+        gc.collect()
+
+        time.sleep(2.0)
+        status = await call(client, "stream_status", session_id="lsl_sibling")
+        check("sibling: connection reports disconnected",
+              status["connection"]["connected"] is False, str(status["connection"]))
+
+        thread_b = threading.Thread(target=publish_pair, args=(stop_b,), daemon=True)
+        thread_b.start()
+        time.sleep(2.5)  # resolve (<=1s) + open + a couple of poll cycles
+
+        status = await call(client, "stream_status", session_id="lsl_sibling")
+        check(
+            "sibling: reconnects despite a same-source_id sibling also being resolvable",
+            status["connection"]["connected"] is True, str(status["connection"]),
+        )
+
+        window2 = await call(client, "read_window", session_id="lsl_sibling", seconds=1.0)
+        check("sibling: reattached to the ACC-shaped stream, not the EEG-shaped sibling",
+              len(window2["channels"]) == 3, str(window2.get("channels")))
+
+        await call(client, "stop_stream", session_id="lsl_sibling")
+    finally:
+        stop_a.set()
+        stop_b.set()
+        thread_a.join(timeout=2.0)
+        if thread_b is not None:
+            thread_b.join(timeout=2.0)
+
+
 async def verify_errors(client: Client) -> None:
     print("\n[errors] actionable failure messages")
     for tool, args, needle in [
@@ -324,6 +704,10 @@ async def main() -> int:
         await verify_streaming(client)
         await verify_events_and_stim(client)
         await verify_replay(client)
+        await verify_lsl(client)
+        await verify_lsl_reconnect(client)
+        await verify_lsl_zombie_outlet(client)
+        await verify_lsl_sibling_streams(client)
         await verify_errors(client)
 
     print(f"\n{'=' * 52}\n  {PASSED} passed, {FAILED} failed\n{'=' * 52}")

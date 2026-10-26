@@ -55,6 +55,7 @@ class StreamSession:
     recording_result: dict[str, Any] | None = None
     processors: dict[str, Processor] = field(default_factory=dict)
     processor_outputs: dict[str, deque] = field(default_factory=dict)
+    marker_listener: Any = None  # markers.LSLMarkerInlet | None
     history: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -123,6 +124,11 @@ class StreamSession:
                     backend.close()
                 except Exception:
                     pass
+            if self.marker_listener is not None:
+                try:
+                    self.marker_listener.close()
+                except Exception:
+                    pass
             self.log("stopped")
 
     def _run(self) -> None:
@@ -174,6 +180,9 @@ class StreamSession:
                             timestamp=event.timestamp, value=event.value,
                             duration=event.duration, payload=event.payload,
                         )
+
+                if self.marker_listener is not None:
+                    self._ingest_markers()
 
                 if chunk.exhausted:
                     self.exhausted = True
@@ -271,6 +280,76 @@ class StreamSession:
                 pass
         for history in self.processor_outputs.values():
             history.clear()
+
+    # --- external markers (e.g. PsychoPy over LSL) -------------------------
+
+    def attach_marker_listener(self, listener: Any) -> Any:
+        listener.open()
+        with self._lock:
+            existing = self.marker_listener
+            self.marker_listener = listener
+        if existing is not None:
+            try:
+                existing.close()
+            except Exception:
+                pass
+        self.log(f"attached marker listener '{listener.stream_name}'")
+        return listener
+
+    def detach_marker_listener(self) -> bool:
+        with self._lock:
+            listener = self.marker_listener
+            self.marker_listener = None
+        if listener is None:
+            return False
+        try:
+            listener.close()
+        except Exception:
+            pass
+        self.log("detached marker listener")
+        return True
+
+    def _locate_sample_index(self, timestamp: float) -> int | None:
+        """Absolute raw-buffer index of the sample nearest ``timestamp``.
+
+        For an event that arrived as part of the chunk currently being
+        processed, its index is cheap to compute directly (see the
+        ``chunk.events`` handling in ``_run``, which searches just that
+        chunk). A marker from an independent, asynchronously polled listener
+        has no such host chunk to search -- this instead searches a recent
+        window of the buffer's own recorded timestamps, which is the raw
+        signal's real arrival time regardless of when the marker happened to
+        be picked up.
+        """
+        sfreq = self.source.info.sfreq
+        if sfreq <= 0:
+            return None
+        window_n = min(self.raw_buffer.capacity, max(int(sfreq * 5), 1))
+        _data, ts = self.raw_buffer.read_last(window_n)
+        if ts.size == 0:
+            return None
+        total = self.raw_buffer.total_written
+        start_abs = total - ts.size
+        offset = int(np.searchsorted(ts, timestamp))
+        return start_abs + min(offset, ts.size - 1)
+
+    def _ingest_markers(self) -> None:
+        """Poll the attached marker listener and fold its output into the
+        event log. Wrapped in its own error containment, same reasoning as
+        processors: a marker source hiccup must not take acquisition down
+        with it."""
+        try:
+            markers = self.marker_listener.poll()
+        except Exception as exc:
+            self.log(f"marker listener error: {exc}")
+            return
+        for marker in markers:
+            self.events.append(
+                label=marker.label, origin="marker", timestamp=marker.timestamp,
+                value=marker.value,
+                sample_index=self._locate_sample_index(marker.timestamp),
+                payload=marker.payload,
+            )
 
     # --- recording --------------------------------------------------------
 
@@ -472,6 +551,10 @@ class StreamSession:
         }
         if hasattr(self.source, "position"):
             status["replay"] = self.source.position()
+        if hasattr(self.source, "connection_status"):
+            status["connection"] = self.source.connection_status()
+        if self.marker_listener is not None:
+            status["marker_listener"] = self.marker_listener.describe()
         status["recording"] = (
             self.recorder.status() if self.recorder is not None else {"recording": False}
         )

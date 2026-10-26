@@ -8,7 +8,7 @@ closed-loop session be reconstructed afterwards without joining two clocks.
 
 | `origin` | Comes from |
 |---|---|
-| `marker` | The board's marker channel (live) |
+| `marker` | The board's marker channel (live), or an external LSL marker stream attached with `attach_marker_stream` |
 | `annotation` | A replayed recording's annotations or trigger channel |
 | `stim` | A command we dispatched, delivered **or refused** |
 | `manual` | Logged by hand with `log_event` |
@@ -64,6 +64,57 @@ get_events(session_id="s1", origin="stim", last_seconds=60)
 ```
 
 **Returns:** `events` in chronological order, `n_total`, and `counts_by_label`.
+
+---
+
+## `attach_marker_stream`
+
+Fold an external LSL marker stream into this session's event log. This is the
+reverse of `attach_stim_backend(backend="lsl")`: that *publishes* markers for
+other software to read; this *consumes* markers from other software.
+
+Any program that timestamps its own events over LSL works the same way —
+stimulus-presentation software such as PsychoPy or OpenViBE, LabRecorder, or a
+script of your own. Nothing here requires any particular one of them; it only
+needs an LSL outlet that is already running.
+
+| Arg | Default | Meaning |
+|---|---|---|
+| `stream_type` | `"Markers"` | LSL type to resolve by. `Markers` is the convention most marker outlets declare |
+| `name` | `None` | Resolve by outlet name instead, to pick one of several |
+| `resolve_timeout` | `5.0` | Seconds to wait for the outlet before failing |
+
+```text
+attach_marker_stream(session_id="s1", stream_type="Markers")
+```
+
+Each marker lands in the log with `origin="marker"`, placed at the sample index
+nearest its own LSL timestamp in the raw buffer — the same "one log, one
+clock" treatment a board's own marker channel gets. Markers that arrive while a
+recording is running end up in the saved file's annotations.
+
+Only one marker stream can be attached per session; attaching again replaces
+the previous one. Needs `pip install eeg-mcp[lsl]`.
+
+!!! note "No auto-reconnect"
+    Unlike the LSL *acquisition* source, a marker stream that drops is not
+    reattached automatically. Call `attach_marker_stream` again if the sender
+    restarts.
+
+**Returns:** the resolved stream's `stream_name`, `stream_type` and `source_id`.
+
+---
+
+## `detach_marker_stream`
+
+Stop listening for external markers on this session. Markers already logged
+stay in the log.
+
+```text
+detach_marker_stream(session_id="s1")
+```
+
+**Returns:** `detached` — whether a marker listener was attached.
 
 ---
 

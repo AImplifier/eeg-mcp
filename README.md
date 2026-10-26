@@ -72,7 +72,10 @@ shows what that looks like end to end, with no hardware required.
 66 BrainFlow board identifiers — OpenBCI, Muse, ANT Neuro, g.tec, Mentalab and
 more — plus a synthetic board that needs no hardware. Samples land in a ring
 buffer filled by a background thread, so tool calls read a live view instead of
-blocking on a device.
+blocking on a device. When BrainFlow itself can't reach a board — e.g. Muse on
+Windows, blocked by an [upstream SimpleBLE
+bug](https://aimplifier.github.io/eeg-mcp/hardware/#acquiring-via-lsl-instead-of-brainflow) —
+`board="lsl"` attaches to an existing LSL outlet instead.
 
 </td>
 <td width="50%" valign="top">

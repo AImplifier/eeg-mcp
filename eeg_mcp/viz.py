@@ -39,6 +39,14 @@ def _fmt(value: float, digits: int = 2) -> str:
     return f"{value:.{digits}f}"
 
 
+def _unit_symbol(unit: str) -> str:
+    """Short axis-label form. "microvolts" is spelled out in SourceInfo (it
+    reads better in tool output); axes want the compact "uV" every EEG plot
+    already used. Anything else -- an LSL outlet's own declared unit -- is
+    already compact, so it passes through unchanged."""
+    return "uV" if unit == "microvolts" else unit
+
+
 def _polyline(xs: np.ndarray, ys: np.ndarray) -> str:
     """Build an SVG points string, dropping non-finite samples."""
     finite = np.isfinite(xs) & np.isfinite(ys)
@@ -54,6 +62,7 @@ def render_traces(
     row_height: int = 46,
     title: str = "",
     per_channel_scale: bool = True,
+    unit: str = "microvolts",
 ) -> str:
     """Stacked multichannel traces with event markers -- the standard EEG view.
 
@@ -77,11 +86,19 @@ def render_traces(
     rel = (times - t0).astype(float)
     xs = pad_l + (rel / span) * plot_w
 
+    # Centred on each channel's own mean, not just scaled by its raw peak: a
+    # signal with a large DC offset relative to its swing -- an unfiltered
+    # accelerometer axis sitting at ~1 g, a raw optical channel with a
+    # six-figure baseline -- would otherwise divide by a peak dominated by
+    # the offset and render as a flat line even though real variation is
+    # there. EEG is typically near zero-mean already, so this changes
+    # nothing for the common case.
+    means = np.mean(data, axis=1)
     if per_channel_scale:
-        scales = np.max(np.abs(data), axis=1)
+        scales = np.max(np.abs(data - means[:, None]), axis=1)
         scales[scales == 0] = 1.0
     else:
-        peak = float(np.max(np.abs(data))) or 1.0
+        peak = float(np.max(np.abs(data - means[:, None]))) or 1.0
         scales = np.full(n_ch, peak)
 
     parts = [
@@ -101,7 +118,7 @@ def render_traces(
             f'<text x="{pad_l - 8}" y="{mid + 4:.1f}" class="ch-label">{_esc(name)}</text>'
         )
         amp = (row_height / 2) * 0.86
-        ys = mid - (data[i] / scales[i]) * amp
+        ys = mid - ((data[i] - means[i]) / scales[i]) * amp
         color = SERIES_COLORS[i % len(SERIES_COLORS)]
         parts.append(
             f'<polyline points="{_polyline(xs, ys)}" fill="none" '
@@ -109,7 +126,7 @@ def render_traces(
         )
         parts.append(
             f'<text x="{pad_l + plot_w + 4}" y="{mid + 3:.1f}" class="scale-label">'
-            f'{_fmt(scales[i], 0)}</text>'
+            f'±{_fmt(scales[i], 0)}</text>'
         )
 
     for event in events or []:
@@ -137,7 +154,8 @@ def render_traces(
         )
     parts.append(
         f'<text x="{pad_l + plot_w}" y="{axis_y}" class="axis-note" '
-        f'text-anchor="end">uV (peak per channel, right)</text>'
+        f'text-anchor="end">{_esc(_unit_symbol(unit))} '
+        f'(peak deviation per channel, right)</text>'
     )
     parts.append("</svg>")
     return "".join(parts)
@@ -151,6 +169,7 @@ def render_psd(
     height: int = 320,
     title: str = "Power spectral density",
     bands: dict[str, tuple[float, float]] | None = None,
+    unit: str = "microvolts",
 ) -> str:
     """Log-power spectrum per channel, with the classical bands shaded behind."""
     if freqs.size == 0 or psd.shape[1] == 0:
@@ -229,7 +248,7 @@ def render_psd(
     parts.append(
         f'<text x="{pad_l - 44}" y="{pad_t + plot_h / 2}" class="axis-note" '
         f'transform="rotate(-90 {pad_l - 44} {pad_t + plot_h / 2})" '
-        f'text-anchor="middle">dB uV^2/Hz</text>'
+        f'text-anchor="middle">dB {_esc(_unit_symbol(unit))}^2/Hz</text>'
     )
     parts.append("</svg>")
     return "".join(parts)
@@ -291,14 +310,15 @@ def render_band_bars(
     return "".join(parts)
 
 
-def render_quality_table(quality: dict[str, Any]) -> str:
+def render_quality_table(quality: dict[str, Any], unit: str = "microvolts") -> str:
     """Per-channel health as a table, with bad channels called out."""
     channels = quality.get("channels", {})
     if not channels:
         return '<p class="empty">No quality data.</p>'
+    sym = _esc(_unit_symbol(unit))
     rows = [
-        "<table class='qt'><thead><tr><th>Channel</th><th>RMS (uV)</th>"
-        "<th>Peak-peak (uV)</th><th>Line noise</th><th>Status</th></tr></thead><tbody>"
+        f"<table class='qt'><thead><tr><th>Channel</th><th>RMS ({sym})</th>"
+        f"<th>Peak-peak ({sym})</th><th>Line noise</th><th>Status</th></tr></thead><tbody>"
     ]
     for name, metrics in channels.items():
         flags = [

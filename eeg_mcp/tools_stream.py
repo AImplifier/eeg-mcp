@@ -10,7 +10,12 @@ from .app import mcp
 from .monitor import monitors
 from .session import store
 from .sources.brainflow_source import BrainFlowSource, list_boards as _list_boards
+from .sources.lsl_source import LSLSource
 from .utils import to_jsonable
+
+# Keys accepted in `params` when board="lsl" -- kept separate from BrainFlow's
+# _ALLOWED_PARAMS so a typo in either mode gets a message naming the right set.
+_LSL_PARAMS = {"stream_type", "name", "resolve_timeout", "reconnect", "stale_after_sec"}
 
 
 @mcp.tool()
@@ -28,8 +33,11 @@ def list_boards() -> dict[str, Any]:
     return to_jsonable({
         "n_boards": len(boards),
         "boards": boards,
-        "hint": "Use board='synthetic' to develop without hardware, or "
-                "start_replay to play back an existing recording instead.",
+        "hint": "Use board='synthetic' to develop without hardware, "
+                "start_replay to play back an existing recording instead, or "
+                "board='lsl' to attach to an existing LSL outlet (e.g. "
+                "`muselsl stream`) when BrainFlow cannot open the device "
+                "directly.",
     })
 
 
@@ -49,16 +57,40 @@ def start_stream(
     Args:
         session_id: Name you will pass to every later call for this stream.
         board: Board name ('synthetic', 'cyton', 'muse_2', ...) or numeric id.
-            Call list_boards to see the options.
-        params: BrainFlow connection settings, e.g. {"serial_port": "COM3"} for a
-            Cyton, {"mac_address": "..."} for a Muse, or
-            {"file": "rec.csv", "master_board": "cyton"} for PLAYBACK_FILE_BOARD.
-        channels: Optional subset of BrainFlow EEG row indices. Defaults to all.
+            Call list_boards to see the options. Use 'lsl' to attach to an
+            *existing* LSL outlet instead of having BrainFlow open the device
+            itself -- the route around BrainFlow/SimpleBLE's Windows BLE bug
+            (see docs/installation.md troubleshooting): start `muselsl stream`
+            or another BLE-to-LSL bridge first, then attach here.
+        params: Connection settings for the chosen board. For BrainFlow boards:
+            {"serial_port": "COM3"} for a Cyton, {"mac_address": "..."} for a
+            Muse, or {"file": "rec.csv", "master_board": "cyton"} for
+            PLAYBACK_FILE_BOARD. For board='lsl': {"stream_type": "EEG"}
+            (default) or {"name": "..."} to pick a specific outlet by name,
+            optionally {"resolve_timeout": 5.0}. BLE-backed outlets can drop
+            unpredictably (see docs/hardware.md); by default this source
+            watches for that and reattaches automatically once the bridge
+            tool republishes the outlet, logging a `source_reconnected` event
+            with the gap length rather than leaving a silent hole. Tune with
+            {"reconnect": false} to disable, or {"stale_after_sec": 5.0} to
+            change how long with no samples counts as "disconnected."
+        channels: Optional subset of EEG row indices (BrainFlow rows, or LSL
+            channel indices when board='lsl'). Defaults to all.
 
     Returns:
         Session status including channel names, sampling rate, and buffer size.
     """
-    source = BrainFlowSource(board=board, params=params, channels=channels)
+    if str(board).strip().lower() == "lsl":
+        lsl_params = dict(params or {})
+        unknown = set(lsl_params) - _LSL_PARAMS
+        if unknown:
+            raise ValueError(
+                f"Unknown LSL params: {', '.join(sorted(unknown))}. "
+                f"Allowed: {', '.join(sorted(_LSL_PARAMS))}"
+            )
+        source = LSLSource(channels=channels, **lsl_params)
+    else:
+        source = BrainFlowSource(board=board, params=params, channels=channels)
     session = store.create(session_id, source)
     session.start()
     return to_jsonable({
@@ -128,13 +160,18 @@ def stream_status(session_id: str) -> dict[str, Any]:
     ``throughput_ratio`` below 1.0 means the producer is not keeping up and
     samples are being dropped; ``filters.group_delay_sec`` is how far behind
     real time a filtered feature is; ``last_error`` explains a stopped producer.
+    For an LSL session, ``connection`` reports whether the underlying BLE
+    bridge is currently attached, and how many times it has silently
+    reconnected -- check ``get_events(origin="annotation")`` for the
+    ``source_reconnected`` records, which carry each gap's length.
 
     Args:
         session_id: The session to report on.
 
     Returns:
         Source description, buffer fill, throughput, filter chain, event counts,
-        attached stimulation backends, and replay position when applicable.
+        attached stimulation backends, replay position, and LSL connection
+        state, each where applicable.
     """
     return to_jsonable(store.get(session_id).status())
 
@@ -166,7 +203,9 @@ def read_window(
 
     Returns:
         Channel names, timestamps, per-channel statistics, and (optionally) the
-        decimated samples in microvolts.
+        decimated samples. ``units`` names what the data is in -- microvolts
+        for a BrainFlow or replay session, or whatever the outlet declares
+        (e.g. "g", "dps") for an LSL session; "unknown" if it declared none.
     """
     session = store.require_running(session_id)
     data, timestamps, was_filtered = session.snapshot(seconds, filtered=filtered)
@@ -194,7 +233,7 @@ def read_window(
         "filtered": was_filtered,
         "filter_requested": filtered,
         "decimation": step,
-        "units": "microvolts",
+        "units": session.source.info.unit,
         "t_start": float(timestamps[0]) if timestamps.size else None,
         "t_end": float(timestamps[-1]) if timestamps.size else None,
         "stats": {

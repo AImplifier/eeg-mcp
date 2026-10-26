@@ -46,6 +46,10 @@ from .utils import FREQ_BANDS, now, to_jsonable
 _MAX_POINTS = 700
 # Largest control body we will read, so a malformed request cannot exhaust memory.
 _MAX_BODY = 64 * 1024
+# Safety margin added to the events query's cutoff, on top of the trace
+# window itself -- see _snapshot's "events" field for why this has to be
+# generous rather than exact.
+_EVENT_QUERY_PADDING_SEC = 10.0
 
 
 def _snapshot(session: Any, seconds: float, filtered: bool) -> dict[str, Any]:
@@ -65,15 +69,40 @@ def _snapshot(session: Any, seconds: float, filtered: bool) -> dict[str, Any]:
         "session_id": session.session_id,
         "channels": list(info.ch_names),
         "sfreq": info.sfreq,
+        "unit": info.unit,
         "filtered": bool(was_filtered),
         "n_samples": int(data.shape[1]),
         "t_start": float(timestamps[0]),
         "t_end": float(timestamps[-1]),
         "data": data[:, ::step].tolist(),
-        "peak_uv": [float(np.max(np.abs(row))) if row.size else 0.0 for row in data],
+        # Deviation from each channel's own window mean, not the raw peak
+        # amplitude: a signal with a large DC offset relative to its swing --
+        # an unfiltered accelerometer axis sitting at ~1 g, or a raw optical
+        # channel with a six-figure baseline -- would otherwise divide by a
+        # peak dominated by the offset and render as a flat line even though
+        # real variation is there. EEG is typically near zero-mean already
+        # (especially filtered), so this changes nothing for the common case.
+        "chan_mean": [float(np.mean(row)) if row.size else 0.0 for row in data],
+        "peak_dev": [
+            float(np.max(np.abs(row - np.mean(row)))) if row.size else 0.0
+            for row in data
+        ],
+        # Anchored to wall-clock now(), not the buffer's own timestamps[0]:
+        # an LSL source's sample clock can drift from true wall time (a
+        # bridge reconnect was observed to leave it running ~1.8s ahead, on
+        # this same real hardware), and a viewer positioning these events by
+        # its own wall-clock "now" would then see one vanish from this list
+        # well before it actually aged out of its display window -- a
+        # premature disappearance with no visible cause, since the position
+        # math and the inclusion cutoff were using two different clocks. The
+        # padding keeps this list a superset of what any real-time view
+        # needs; the view's own timestamp comparison still does the exact
+        # windowing, on one consistent (wall) clock.
         "events": [
             e.as_dict()
-            for e in session.events.query(since=float(timestamps[0]), limit=60)
+            for e in session.events.query(
+                since=now() - seconds - _EVENT_QUERY_PADDING_SEC, limit=60
+            )
         ],
         "buffered_sec": session.raw_buffer.n_available / info.sfreq,
         "throughput_ratio": session.status().get("throughput_ratio"),
@@ -456,6 +485,13 @@ const COLORS=["#4c8dff","#f2994a","#27ae60","#eb5757","#9b51e0","#00b8d9",
   "#f2c94c","#ff6b9d","#56ccf2","#6fcf97"];
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const $=id=>document.getElementById(id);
+// A fixed decimal count reads fine for microvolt-scale EEG but rounds a
+// small-magnitude signal (gyroscope deviations under 1 dps) to "0" -- scale
+// the precision to the value instead.
+function fmtNum(v){
+  const a=Math.abs(v);
+  return v.toFixed(a<10?2:a<100?1:0);
+}
 let failures=0, isReplay=false, scrubbing=false, lastData=null;
 
 function draw(d){
@@ -467,23 +503,27 @@ function draw(d){
   const muted=css("--muted"), line=css("--line");
   ctx.font="11px ui-sans-serif,system-ui,sans-serif";
 
+  const unit=d.unit||"microvolts";
   for(let i=0;i<rows;i++){
-    const mid=i*rh+rh/2, series=d.data[i];
+    const mid=i*rh+rh/2, series=d.data[i], mean=d.chan_mean[i]||0;
     ctx.strokeStyle=line; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(padL,mid); ctx.lineTo(padL+plotW,mid); ctx.stroke();
     ctx.fillStyle=muted; ctx.textAlign="right";
     ctx.fillText(d.channels[i], padL-8, mid+4);
-    // Per-channel autoscale: the only way a montage stays readable when one
-    // electrode has ten times the amplitude of its neighbour.
-    const peak=d.peak_uv[i]||1, amp=(rh/2)*0.84;
+    // Per-channel autoscale, centred on the channel's own window mean: the
+    // only way a montage stays readable when one electrode has ten times the
+    // amplitude of its neighbour, and the only way a signal with a large DC
+    // offset (accelerometer gravity, raw optical baseline) doesn't render as
+    // a flat line -- see the peak_dev comment in _snapshot.
+    const peak=d.peak_dev[i]||1, amp=(rh/2)*0.84;
     ctx.strokeStyle=COLORS[i%COLORS.length]; ctx.lineWidth=1.1; ctx.beginPath();
     for(let k=0;k<series.length;k++){
-      const x=padL+(k/(series.length-1||1))*plotW, y=mid-(series[k]/peak)*amp;
+      const x=padL+(k/(series.length-1||1))*plotW, y=mid-((series[k]-mean)/peak)*amp;
       k?ctx.lineTo(x,y):ctx.moveTo(x,y);
     }
     ctx.stroke();
     ctx.fillStyle=muted; ctx.textAlign="left";
-    ctx.fillText(peak.toFixed(0)+" uV", padL+plotW+6, mid+4);
+    ctx.fillText("±"+fmtNum(peak)+" "+unit, padL+plotW+6, mid+4);
   }
 
   const span=(d.t_end-d.t_start)||1;
@@ -518,13 +558,16 @@ function bands(d){
 function quality(d){
   const host=$("quality");
   if(!d.quality){ host.textContent=d.quality_error||"no quality data yet"; return; }
-  const ch=d.quality.channels, bad=d.quality.bad_channels||[];
-  let h="<table><thead><tr><th>Channel</th><th>RMS uV</th><th>Peak-peak uV</th>"+
-    "<th>Line noise</th><th>Status</th></tr></thead><tbody>";
+  const ch=d.quality.channels, bad=d.quality.bad_channels||[], unit=d.unit||"microvolts";
+  // The underlying metrics are always named *_uv (they were written for EEG,
+  // in microvolts); the header names the unit actually in play so the table
+  // doesn't claim "uV" for an accelerometer or optics stream.
+  let h="<table><thead><tr><th>Channel</th><th>RMS ("+unit+")</th>"+
+    "<th>Peak-peak ("+unit+")</th><th>Line noise</th><th>Status</th></tr></thead><tbody>";
   for(const k in ch){ const m=ch[k];
     const flags=["flat","railed","line_noisy"].filter(f=>m[f]);
     h+="<tr class='"+(flags.length?"bad":"ok")+"'><td>"+k+"</td><td>"+
-      m.rms_uv.toFixed(1)+"</td><td>"+m.ptp_uv.toFixed(1)+"</td><td>"+
+      fmtNum(m.rms_uv)+"</td><td>"+fmtNum(m.ptp_uv)+"</td><td>"+
       m.line_noise_ratio.toFixed(3)+"</td><td>"+(flags.join(", ")||"ok")+
       "</td></tr>";
   }

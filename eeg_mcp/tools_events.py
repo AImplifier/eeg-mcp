@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from .app import mcp
+from .markers import LSLMarkerInlet
 from .session import store
 from .utils import now, to_jsonable
 
@@ -191,7 +192,7 @@ def get_epoch_around_event(
         "n_samples": int(data.shape[1]),
         "filtered": was_filtered,
         "decimation": step,
-        "units": "microvolts",
+        "units": session.source.info.unit,
         "times": (np.arange(data.shape[1]) / sfreq + tmin)[::step],
         "data": data[:, ::step],
         "timestamps": timestamps[::step],
@@ -216,3 +217,61 @@ def clear_events(session_id: str) -> dict[str, Any]:
     session.events.clear()
     session.log(f"cleared {count} events")
     return to_jsonable({"session_id": session_id, "cleared": count})
+
+
+@mcp.tool()
+def attach_marker_stream(
+    session_id: str,
+    stream_type: str = "Markers",
+    name: str | None = None,
+    resolve_timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Fold an external LSL marker stream into this session's event log.
+
+    The reverse of attach_stim_backend(backend="lsl"): that publishes markers
+    for other software to consume; this consumes markers *from* other
+    software -- PsychoPy is the common case, but anything that timestamps its
+    own events over LSL works the same way. Each marker lands with
+    origin='marker' at the sample index nearest its own LSL timestamp in the
+    raw buffer, the same "one event log, one clock" treatment a board's own
+    marker channel gets.
+
+    Only one marker stream can be attached per session; attaching again
+    replaces the previous one.
+
+    Args:
+        session_id: The session to annotate.
+        stream_type: LSL type to resolve by. 'Markers' matches what PsychoPy
+            and most LSL marker outlets (including this server's own
+            attach_stim_backend(backend="lsl")) declare by convention.
+        name: Resolve by outlet name instead, to pick one of several.
+        resolve_timeout: Seconds to wait for the outlet before failing.
+
+    Returns:
+        The resolved stream's name, type and source_id.
+    """
+    session = store.get(session_id)
+    listener = LSLMarkerInlet(
+        stream_type=stream_type, name=name, resolve_timeout=resolve_timeout,
+    )
+    session.attach_marker_listener(listener)
+    return to_jsonable({
+        "session_id": session_id, "attached": True, **listener.describe(),
+        "note": "Markers will appear in get_events with origin='marker' as "
+                "they arrive.",
+    })
+
+
+@mcp.tool()
+def detach_marker_stream(session_id: str) -> dict[str, Any]:
+    """Stop listening for external markers on this session.
+
+    Args:
+        session_id: The session to detach from.
+
+    Returns:
+        Whether a marker listener was attached.
+    """
+    session = store.get(session_id)
+    detached = session.detach_marker_listener()
+    return to_jsonable({"session_id": session_id, "detached": detached})

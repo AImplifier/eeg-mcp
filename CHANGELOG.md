@@ -4,6 +4,92 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Acquisition
+
+- `start_stream(board="lsl")`: a new acquisition path that attaches to an
+  *existing* LSL outlet (`eeg_mcp.sources.lsl_source.LSLSource`) instead of
+  having BrainFlow open the device itself. Routes around cases where BrainFlow
+  cannot reach a board directly — most notably Muse on Windows, where a
+  longstanding bug in BrainFlow's SimpleBLE bindings
+  ([simpleble/simpleble#31](https://github.com/simpleble/simpleble/issues/31))
+  blocks discovery even though the device is confirmed advertising, while
+  `muselsl` (built on `bleak`, a different BLE binding) finds it immediately.
+  Everything downstream — filtering, epoching, recording, stimulation — runs
+  unchanged; only acquisition is rerouted. Needs `pip install eeg-mcp[lsl]`.
+  Channel names and per-channel unit come from the outlet's own metadata
+  (`SourceInfo.unit`, threaded through `read_window`, the live monitor, and
+  the static traces/PSD/quality-table exports — none of which any longer
+  assume every source is in microvolts). LSL timestamps are reconciled with
+  Unix epoch by inspecting one real sample rather than assumed, since
+  real-world bridges disagree on convention (`muselsl` stamps already-epoch
+  values; the LSL spec nominally expects its own clock). Documented in
+  [Supported hardware](https://aimplifier.github.io/eeg-mcp/hardware/#acquiring-via-lsl-instead-of-brainflow)
+  and the installation troubleshooting table.
+- **LSL reconnection.** BLE links drop — streaming a Muse S Athena's
+  EEG+ACC+GYRO+OPTICS together over one connection was measured to disconnect
+  within one to three minutes on Windows/bleak, and the same class of failure
+  is reported against `muselsl` independently of this project
+  ([muse-lsl#55](https://github.com/alexandrebarachant/muse-lsl/issues/55),
+  [#110](https://github.com/alexandrebarachant/muse-lsl/issues/110)). Rather
+  than let a dropped bridge look identical to a silent recording gap,
+  `LSLSource` now detects staleness, re-resolves the *same stream* by the
+  type/name it was originally given, validates the replacement outlet still
+  matches the channel count and sample rate the session was built around, and
+  logs a `source_reconnected` event carrying the gap length. The session
+  survives disconnected in the meantime rather than erroring out —
+  `stream_status().connection` reports live state, including what a reconnect
+  currently resolves by (`resolves_by`). Tune via `params={"reconnect":
+  false}` or `{"stale_after_sec": ...}`. Restarting the bridge process itself
+  (e.g. `muselsl stream` exiting) is a separate, necessary half of this that
+  stays outside eeg-mcp by design — a `muselsl_supervisor.py` pattern is
+  documented alongside this for that half.
+
+  Two distinct failure modes surfaced against real multi-hour sessions,
+  both producing the same symptom — one of four simultaneous streams
+  silently stuck after a bridge restart while the others recovered: (1) a
+  still-registered but dead outlet from the *previous* bridge process, whose
+  LSL announcement hadn't yet been retracted — fixed by requiring one real
+  sample from a reconnect candidate before committing to it, not just a
+  metadata match; (2) reconnecting by `source_id` *alone* — `muselsl` gives
+  all four of a device's simultaneous outlets the same `source_id`
+  (`"Muse<mac>"`), differing only in `type`, so a reconnect resolving by
+  `source_id` alone couldn't tell its own stream apart from a sibling and
+  could get handed a different sensor's outlet indefinitely — fixed by
+  resolving reconnects by the original type/name discriminator, with
+  `source_id` kept only as an additional same-device check.
+
+### Events
+
+- `attach_marker_stream(session_id, ...)` / `detach_marker_stream(session_id)`:
+  the other direction from `attach_stim_backend(backend="lsl")`. That
+  publishes markers for other software (PsychoPy, OpenViBE, LabRecorder) to
+  consume; this consumes markers *from* other software — PsychoPy over LSL is
+  the common case — folding each one into the session's own event log with
+  `origin="marker"`, at the sample index nearest its own timestamp in the raw
+  buffer. Verified against a simulated PsychoPy instruction task (recorded
+  end to end: live event log, online epoching, and the saved `.fif`'s
+  annotations all checked). Known limitation: unlike `LSLSource`, does not
+  yet auto-reconnect if the marker outlet drops.
+
+### Fixed
+
+- **Live monitor and static reports: signals with a large DC offset drew as a
+  flat line.** Per-channel autoscale divided by the channel's raw peak, so a
+  channel sitting far from zero relative to its swing — an unfiltered
+  accelerometer axis near 1 g, a raw optical channel with a six-figure
+  baseline — scaled to its offset instead of its variation. It now scales by
+  deviation from the channel's own window mean. Zero-mean EEG is unaffected.
+- **Live monitor: event markers could vanish before leaving the display
+  window.** The events list in each snapshot was cut off using the sample
+  buffer's own timestamps, while a viewer positions events by wall-clock
+  time. When the sample clock runs ahead of wall time — observed at about
+  1.8 s after a bridge reconnect — an event dropped out of the list well
+  before it aged out of view. The cutoff is now anchored to wall-clock time
+  with a safety margin, so the viewer's own timestamp comparison does the
+  exact windowing on one consistent clock.
+
 ## [0.1.0] — 2026-07-26
 
 First release. **47 MCP tools** over stdio, **225 checks** across five suites.

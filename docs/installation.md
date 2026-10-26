@@ -158,3 +158,4 @@ python testing/verify.py
 | `throughput_ratio` below 1.0 | Producer not keeping up | Raise `EEG_MCP_POLL_INTERVAL_SEC`, or reduce channels |
 | Hardware stim refuses to open | Safety gate, working as designed | Set `EEG_MCP_ALLOW_HARDWARE_STIM=1` in the **server** env |
 | Monitor URL not loading | Token missing | Use the full URL including `?t=…` from `start_monitor` |
+| Muse not found on Windows (`Failed to find Muse Device`) | Upstream bug in BrainFlow's SimpleBLE bindings ([simpleble/simpleble#31](https://github.com/simpleble/simpleble/issues/31)) | Run `muselsl stream` (uses `bleak`, unaffected) in a separate terminal, then `start_stream(board="lsl")` — see [Acquiring via LSL](hardware.md#acquiring-via-lsl-instead-of-brainflow) |

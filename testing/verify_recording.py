@@ -51,6 +51,10 @@ def check(name: str, condition: bool, detail: str = "") -> bool:
     return bool(condition)
 
 
+def skip(name: str, why: str) -> None:
+    print(f"  SKIP  {name}  ({why})")
+
+
 async def call(client: Client, tool: str, **args):
     result = await client.call_tool(tool, args)
     return result.data if result.data is not None else result.structured_content
@@ -278,11 +282,136 @@ async def test_replay_what_we_recorded(client: Client, stopped: dict) -> None:
     await call(client, "stop_stream", session_id="loop")
 
 
+async def test_psychopy_marker_recording(client: Client) -> None:
+    """A realistic paradigm: a simulated PsychoPy task instructs the subject
+    to blink or relax at known times over its own LSL marker outlet, while
+    eeg-mcp records. This is the scenario attach_marker_stream exists for --
+    verifies markers survive into the saved .fif as annotations at
+    plausible onsets and support online epoching, not just that they show up
+    in the live event log."""
+    print("\n[psychopy] recording with externally-sourced instruction markers")
+    try:
+        import pylsl
+    except ImportError:
+        skip("psychopy marker suite", "pylsl not installed (pip install eeg-mcp[lsl])")
+        return
+
+    import threading
+
+    # (seconds after recording starts, instruction label) -- an alternating
+    # blink/relax cue sequence, the way a simple ERP-artifact task would run.
+    schedule = [
+        (0.8, "instruction_blink"),
+        (1.8, "instruction_relax"),
+        (2.8, "instruction_blink"),
+        (3.8, "instruction_relax"),
+    ]
+    recording_started = threading.Event()
+    stop_event = threading.Event()
+
+    def publish_instructions() -> None:
+        info = pylsl.StreamInfo(
+            "PsychoPy", "Markers", 1, 0, "string", "psychopy-blink-task"
+        )
+        outlet = pylsl.StreamOutlet(info)
+        if not recording_started.wait(timeout=10):
+            return
+        t0 = time.time()
+        for delay, label in schedule:
+            if stop_event.is_set():
+                return
+            remaining = (t0 + delay) - time.time()
+            if remaining > 0:
+                time.sleep(remaining)
+            outlet.push_sample([label])
+
+    thread = threading.Thread(target=publish_instructions, daemon=True)
+    thread.start()
+    try:
+        # BrainFlow permits only one session per board id at a time --
+        # including the synthetic board -- so the still-open "rec" session
+        # from test_record_roundtrip has to be released first (test_guards
+        # does the same for the same reason).
+        await call(client, "stop_stream", session_id="rec")
+        await call(client, "start_stream", session_id="psychopy_rec", board="synthetic")
+        time.sleep(1.0)  # let the outlet resolve and the buffer fill
+
+        attached = await call(
+            client, "attach_marker_stream", session_id="psychopy_rec",
+            stream_type="Markers",
+        )
+        check("marker stream attaches", attached["attached"] is True)
+        check("marker stream identifies the PsychoPy outlet",
+              attached["stream_name"] == "PsychoPy", str(attached["stream_name"]))
+
+        started = await call(
+            client, "start_recording", session_id="psychopy_rec",
+            subject="P02", task="blink", run="01",
+            notes="Instruction markers from a simulated PsychoPy task.",
+        )
+        check("recording starts with a marker listener attached",
+              started["recording"] is True)
+
+        recording_started.set()
+        time.sleep(4.6)  # covers the whole schedule plus margin
+
+        events = await call(client, "get_events", session_id="psychopy_rec",
+                            origin="marker")
+        labels = [e["label"] for e in events["events"]]
+        check("all instruction markers reached the event log",
+              labels.count("instruction_blink") == 2
+              and labels.count("instruction_relax") == 2, str(labels))
+        check("markers ingested from LSL carry a real sample index",
+              all(e["sample_index"] is not None for e in events["events"]),
+              str([e["sample_index"] for e in events["events"]]))
+
+        epoch = await call(
+            client, "get_epoch_around_event", session_id="psychopy_rec",
+            label="instruction_blink", tmin=-0.1, tmax=0.4,
+        )
+        check("an externally-sourced marker supports online epoching",
+              epoch["n_samples"] > 0, str(epoch["n_samples"]))
+
+        stopped = await call(client, "stop_recording", session_id="psychopy_rec")
+        check("recording with a marker listener finalises",
+              stopped["written"] is True)
+
+        raw = mne.io.read_raw_fif(str(stopped["fif_path"]), preload=True,
+                                  verbose="ERROR")
+        file_labels = list(raw.annotations.description)
+        check("instruction markers became annotations in the saved file",
+              file_labels.count("instruction_blink") == 2
+              and file_labels.count("instruction_relax") == 2, str(file_labels))
+
+        blink_onsets = sorted(
+            float(onset) for onset, label in zip(raw.annotations.onset, file_labels)
+            if label == "instruction_blink"
+        )
+        expected = [delay for delay, label in schedule if label == "instruction_blink"]
+        check(
+            "annotation onsets land close to when PsychoPy actually sent them",
+            len(blink_onsets) == len(expected)
+            and all(abs(actual - exp) < 0.5 for actual, exp in zip(blink_onsets, expected)),
+            f"actual={[f'{o:.2f}' for o in blink_onsets]} expected={expected}",
+        )
+    finally:
+        stop_event.set()
+        try:
+            await call(client, "stop_stream", session_id="psychopy_rec")
+        except Exception:
+            pass
+        thread.join(timeout=2.0)
+
+
 async def test_guards(client: Client) -> None:
     print("\n[guards] refusing the wrong thing")
     # BrainFlow permits only one session per board id, so the earlier synthetic
-    # stream has to be released before this section opens its own.
-    await call(client, "stop_stream", session_id="rec")
+    # stream has to be released before this section opens its own. Already
+    # stopped if test_psychopy_marker_recording ran (it needs the board too).
+    try:
+        await call(client, "stop_stream", session_id="rec")
+    except Exception:
+        pass
 
     for name, (tool, args), needle in [
         ("recording a session that does not exist",
@@ -329,9 +458,10 @@ async def main() -> int:
             await test_registration(client, stopped)
             test_neuro_mcp_compatibility()
             await test_replay_what_we_recorded(client, stopped)
+            await test_psychopy_marker_recording(client)
             await test_guards(client)
         finally:
-            for sid in ("rec", "loop", "guard"):
+            for sid in ("rec", "loop", "guard", "psychopy_rec"):
                 try:
                     await call(client, "stop_stream", session_id=sid)
                 except Exception:

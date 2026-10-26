@@ -50,10 +50,16 @@ class SourceChunk:
 class SourceInfo:
     """Static description of what a source produces."""
 
-    kind: str  # "brainflow" | "replay"
+    kind: str  # "brainflow" | "replay" | "lsl"
     name: str
     sfreq: float
     ch_names: list[str]
+    # BrainFlow and replay sources always convert to microvolts (see
+    # replay_source's MNE loader); an LSL source has no such guarantee and
+    # reports whatever unit the outlet itself declares, or "unknown" if it
+    # declares none. Tools that display or scale a signal should read this
+    # rather than assuming microvolts.
+    unit: str = "microvolts"
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -67,6 +73,7 @@ class SourceInfo:
             "sfreq": self.sfreq,
             "n_channels": self.n_channels,
             "ch_names": self.ch_names,
+            "unit": self.unit,
             **self.metadata,
         }
 

@@ -52,7 +52,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Software stimulation targets and network marker streams.
+# LSL acquisition (start_stream(board="lsl")), software stimulation targets,
+# and network marker streams.
 lsl = ["pylsl>=1.16"]
 # Serial / TTL trigger delivery to hardware stimulators (TMS, tES, trigger boxes).
 serial = ["pyserial>=3.5"]

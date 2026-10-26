@@ -153,6 +153,46 @@ def main() -> int:
         "- **`STREAMING_BOARD`** (id -2) — attaches to another BrainFlow "
         "process streaming over the network.",
         "",
+        "## Acquiring via LSL instead of BrainFlow",
+        "",
+        "Some boards are blocked from connecting through BrainFlow on some "
+        "setups even when confirmed powered on and advertising. The board most "
+        "often hit by this is Muse on Windows: BrainFlow's BLE scanner "
+        "(SimpleBLE) has a longstanding bug in its Windows Python bindings "
+        "([simpleble/simpleble#31]"
+        "(https://github.com/simpleble/simpleble/issues/31), also tracked in "
+        "[brainflow-dev/brainflow#393]"
+        "(https://github.com/brainflow-dev/brainflow/issues/393)) that keeps "
+        "`prepare_session()` from finding the device at all. Tools built on a "
+        "different BLE binding — `muselsl` uses `bleak` — do not hit this bug.",
+        "",
+        "If a board is otherwise unreachable, `start_stream(board=\"lsl\")` "
+        "attaches to an *existing* LSL outlet instead of having BrainFlow open "
+        "the device itself:",
+        "",
+        "```python",
+        "# In a separate terminal: muselsl stream   (uses bleak, not SimpleBLE)",
+        "start_stream(session_id=\"s1\", board=\"lsl\", params={\"stream_type\": \"EEG\"})",
+        "```",
+        "",
+        "Everything downstream — filtering, epoching, recording, stimulation — "
+        "runs unchanged; only acquisition is rerouted. This needs a "
+        "BLE-to-LSL bridge already running (`muselsl stream`, PetalStreamer, "
+        "or similar) and the `lsl` extra: `pip install eeg-mcp[lsl]`. See "
+        "[Acquisition tools](tools/acquisition.md#start_stream) for the full "
+        "`params` reference.",
+        "",
+        "This path is not specific to Muse: any device that publishes an LSL "
+        "outlet can be attached the same way.",
+        "",
+        "Bluetooth links drop, especially when several sensor streams share one "
+        "connection, so the LSL source expects it: if the outlet goes quiet it "
+        "marks the session disconnected, reattaches on its own once the bridge "
+        "is back, and logs a `source_reconnected` event carrying the gap length "
+        "rather than leaving a silent hole in the recording. See "
+        "[What happens when the bridge drops]"
+        "(tools/acquisition.md#what-happens-when-the-bridge-drops).",
+        "",
         "## Recording formats for replay",
         "",
         "`start_replay` reads more than BrainFlow's own CSV, because MNE does "
