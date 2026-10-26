@@ -324,6 +324,12 @@ async def test_psychopy_marker_recording(client: Client) -> None:
             if remaining > 0:
                 time.sleep(remaining)
             outlet.push_sample([label])
+        # A real sender (PsychoPy) holds its outlet open for the whole
+        # experiment. Returning here would destroy the outlet in the same
+        # instant as the final push_sample, and liblsl can drop a sample
+        # still in flight when an outlet is torn down -- measured at ~4% on a
+        # quiet loopback, and seen on Linux CI as the last marker missing.
+        stop_event.wait(timeout=30)
 
     thread = threading.Thread(target=publish_instructions, daemon=True)
     thread.start()
