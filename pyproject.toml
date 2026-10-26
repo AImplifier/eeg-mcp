@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eeg-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "A MCP for real-time EEG: BrainFlow streaming with events, wall-clock replay of existing recordings, stateful online DSP, and stimulation event output to software and hardware (TMS/tES) targets."
 readme = "README.md"
 requires-python = ">=3.10"

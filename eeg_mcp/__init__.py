@@ -10,4 +10,4 @@ Three capabilities, one session model:
   (serial/TTL, TMS, tES) targets through one backend-agnostic contract.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
